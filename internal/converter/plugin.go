@@ -1,0 +1,296 @@
+package converter
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
+)
+
+type confluencePlugin struct {
+	imageFolder string
+}
+
+// NewConfluencePlugin creates a new plugin for Confluence elements
+func NewConfluencePlugin(imageFolder string) converter.Plugin {
+	return &confluencePlugin{
+		imageFolder: imageFolder,
+	}
+}
+
+// Name returns the plugin name
+func (p *confluencePlugin) Name() string {
+	return "confluence"
+}
+
+// Init initializes the plugin
+func (p *confluencePlugin) Init(conv *converter.Converter) error {
+	// Register handlers for Confluence elements
+	conv.Register.RendererFor("ac:image", converter.TagTypeInline, p.handleImage, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:emoticon", converter.TagTypeInline, p.handleEmoticon, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:structured-macro", converter.TagTypeBlock, p.handleMacro, converter.PriorityStandard)
+
+	return nil
+}
+
+// handleImage converts Confluence images to markdown
+func (p *confluencePlugin) handleImage(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	// Extract filename from ri:filename attribute
+	filename := ""
+	for _, attr := range n.Attr {
+		if attr.Key == "ri:filename" {
+			filename = attr.Val
+			break
+		}
+	}
+
+	if filename == "" {
+		var buf strings.Builder
+		_ = html.Render(&buf, n)
+		filename = parseConfluenceImage(buf.String())
+	}
+
+	if filename == "" {
+		_, _ = w.WriteString("<!-- Image attachment not found -->")
+		return converter.RenderSuccess
+	}
+
+	// Build local path for the image
+	localPath := p.imageFolder + "/" + filename
+
+	_, _ = fmt.Fprintf(w, "![%s](%s)", filename, url.PathEscape(localPath))
+
+	return converter.RenderSuccess
+}
+
+func (p *confluencePlugin) handleEmoticon(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	for _, attr := range n.Attr {
+		if attr.Key == "ac:emoji-fallback" && attr.Val != "" {
+			_, _ = w.WriteString(attr.Val + " ")
+			return converter.RenderTryNext
+		}
+	}
+
+	for _, attr := range n.Attr {
+		if attr.Key == "ac:emoji-shortname" && attr.Val != "" {
+			_, _ = w.WriteString(attr.Val + " ")
+			return converter.RenderTryNext
+		}
+	}
+
+	for _, attr := range n.Attr {
+		if attr.Key == "ac:name" && attr.Val != "" {
+			_, _ = fmt.Fprintf(w, ":%s:", attr.Val)
+			return converter.RenderTryNext
+		}
+	}
+
+	_, _ = w.WriteString(":emoji: ")
+	return converter.RenderTryNext
+}
+
+func (p *confluencePlugin) handleMacro(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	macroName := ""
+	for _, attr := range n.Attr {
+		if attr.Key == "ac:name" {
+			macroName = attr.Val
+			break
+		}
+	}
+
+	if macroName == "" {
+		macroName = "unknown"
+	}
+
+	tryNext := false
+
+	// Handle different macro types
+	var result string
+	switch macroName {
+	case "info":
+		result = p.handleBlockquoteMacro(ctx, n, "ℹ️", "Info")
+	case "warning":
+		result = p.handleBlockquoteMacro(ctx, n, "⚠️", "Warning")
+	case "note":
+		result = p.handleBlockquoteMacro(ctx, n, "📝", "Note")
+	case "tip":
+		result = p.handleBlockquoteMacro(ctx, n, "💡", "Tip")
+	case "code":
+		result = p.handleCodeMacro(n)
+	case "expand":
+		result = p.handleExpandMacro(ctx, n)
+	case "toc":
+		result, tryNext = p.handleTocMacro(n)
+	case "children":
+		result = "<!-- Child Pages -->"
+	default:
+		result = fmt.Sprintf("<!-- Unsupported macro: %s -->", macroName)
+	}
+
+	_, _ = w.WriteString(result)
+	if tryNext {
+		return converter.RenderTryNext
+	}
+	return converter.RenderSuccess
+}
+
+func (p *confluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.Node, emoji, label string) string {
+	content := p.convertNestedHTML(ctx, n)
+	prefix := fmt.Sprintf("%s **%s:**", emoji, label)
+
+	if content == "" {
+		return "> " + prefix
+	}
+
+	// Handle multi-line content for blockquotes
+	lines := strings.Split(content, "\n")
+	if len(lines) > 1 {
+		result := "> " + prefix + "\n"
+		for _, line := range lines {
+			if strings.TrimSpace(line) != "" {
+				result += "> " + line + "\n"
+			} else {
+				result += ">\n"
+			}
+		}
+		return strings.TrimRight(result, "\n")
+	}
+	return fmt.Sprintf("> %s %s", prefix, content)
+}
+
+// handleCodeMacro converts code macros to code blocks
+func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
+	// Convert node to goquery selection for compatibility with existing logic
+	var buf strings.Builder
+	_ = html.Render(&buf, n)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(buf.String()))
+	if err != nil {
+		return fmt.Sprintf("<!-- Error rendering macro: %s -->", err.Error())
+	}
+	selection := doc.Selection
+	rawHTML, _ := selection.Html()
+	language := extractLanguageParameter(rawHTML)
+
+	// Extract code content using improved method
+	var code string
+	plainTextBody := selection.Find("ac\\:plain-text-body").First()
+	if plainTextBody.Length() > 0 {
+		// First try the <pre> tag approach for preprocessed CDATA
+		preTag := plainTextBody.Find("pre[data-cdata='true']").First()
+		if preTag.Length() > 0 {
+			code = preTag.Text()
+
+			// Unescape HTML entities from preprocessing
+			code = strings.ReplaceAll(code, "&lt;", "<")
+			code = strings.ReplaceAll(code, "&gt;", ">")
+			code = strings.ReplaceAll(code, "&amp;", "&")
+
+			code = strings.TrimSpace(code)
+		} else {
+			// Fallback to direct extraction using utility function
+			code = extractCodeContent(rawHTML)
+		}
+	}
+
+	// If still no code, try the utility function directly on the raw HTML
+	if code == "" {
+		code = extractCodeContent(rawHTML)
+	}
+
+	if language != "" {
+		return fmt.Sprintf("```%s\n%s\n```\n", language, code)
+	}
+	return fmt.Sprintf("```\n%s\n```\n", code)
+}
+
+func (p *confluencePlugin) handleTocMacro(n *html.Node) (string, bool) {
+	result := "<!-- Table of Contents -->"
+
+	// For TOC: check if it has parameter children or is self-closing
+	hasParameters := false
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && child.Data == "ac:parameter" {
+			hasParameters = true
+			break
+		}
+	}
+
+	if !hasParameters {
+		// Self-closing or no parameters, continue processing siblings
+		return result, true
+	}
+
+	// Container tag with parameters - don't use tryNext to avoid parameter leakage
+	return result, false
+}
+
+func (p *confluencePlugin) handleExpandMacro(ctx converter.Context, n *html.Node) string {
+	// Extract content from rich-text-body using recursive conversion
+	content := p.convertNestedHTML(ctx, n)
+
+	// Just return the content directly without wrapper - content is already rendered
+	if content != "" {
+		return content + "\n\n"
+	}
+
+	return ""
+}
+
+// convertNestedHTML recursively converts HTML content within macro nodes
+func (p *confluencePlugin) convertNestedHTML(ctx converter.Context, n *html.Node) string {
+	// Find ac:rich-text-body node
+	richTextBody := p.findRichTextBodyNode(n)
+	if richTextBody == nil {
+		return ""
+	}
+
+	// Convert only the direct children of rich-text-body that belong to this macro
+	var buf strings.Builder
+
+	// Process each direct child of the rich-text-body individually
+	for child := richTextBody.FirstChild; child != nil; child = child.NextSibling {
+		// Skip whitespace-only text nodes
+		if child.Type == html.TextNode {
+			text := strings.TrimSpace(child.Data)
+			if text != "" {
+				_, _ = buf.WriteString(text)
+			}
+			continue
+		}
+
+		// Process element nodes
+		if child.Type == html.ElementNode {
+			// Skip empty <p/> elements used as terminators
+			if child.Data == "p" && child.FirstChild == nil {
+				continue
+			}
+			ctx.RenderNodes(ctx, &buf, child)
+		}
+	}
+
+	return strings.TrimSpace(buf.String())
+}
+
+// findRichTextBodyNode recursively finds ac:rich-text-body node
+func (p *confluencePlugin) findRichTextBodyNode(n *html.Node) *html.Node {
+	if n == nil {
+		return nil
+	}
+
+	// Check if current node is ac:rich-text-body
+	if n.Type == html.ElementNode && n.Data == "ac:rich-text-body" {
+		return n
+	}
+
+	// Recursively search children
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if found := p.findRichTextBodyNode(child); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
