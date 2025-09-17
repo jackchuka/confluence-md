@@ -137,7 +137,8 @@ func fixMarkdownLinks(markdown string) string {
 
 // fixNestedListSpacing removes extra blank lines in nested lists recursively
 func fixNestedListSpacing(markdown string) string {
-	pattern := regexp.MustCompile(`(\n\s*[-*+]\s[^\n]*)\n\s*\n(\s{2,}[-*+]\s)`)
+	listMarker := `(?:[-*+]\s|\d+\.\s)`
+	pattern := regexp.MustCompile(`(\n\s*` + listMarker + `[^\n]*)\n\s*\n(\s{2,}` + listMarker + `)`)
 	result := pattern.ReplaceAllString(markdown, "$1\n$2")
 	// Recursively fix until no more changes
 	if result != markdown {
