@@ -318,7 +318,7 @@ func convertPageTree(client *confluence.Client, node *PageNode, outputDir string
 		outputPath := getOutputPath(node, outputDir)
 
 		// Create options for tree conversion (inherit from tree options)
-		conversionOpts := ConvertOptions{
+		conversionOpts := PageOptions{
 			authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
 			commonOptions: opts.commonOptions,
 		}

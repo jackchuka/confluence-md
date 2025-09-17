@@ -8,11 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// convertCmd represents the convert command
-var convertCmd = &cobra.Command{
-	Use:     "convert",
-	Aliases: []string{"c"},
-	Short:   "Convert a single Confluence page to Markdown",
+// pageCmd represents the page command
+var pageCmd = &cobra.Command{
+	Use:   "page",
+	Short: "Convert a single Confluence page to Markdown",
 	Long: `Convert a single Confluence page to Markdown format.
 
 Provide the page URL and your API token to download and convert the page.
@@ -20,38 +19,38 @@ The converted content is saved to an output directory with images in an assets f
 
 Examples:
   # Convert to default output directory
-  confluence-md convert https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title
-  
+  confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title
+
   # Convert to custom directory
-  confluence-md convert https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title --output ./docs
-  
+  confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title --output ./docs
+
   # Convert without downloading images
-  confluence-md convert https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title --download-images=false`,
+  confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title --download-images=false`,
 
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runConvert(cmd, args)
+		return runPage(cmd, args)
 	},
 }
 
-var convertOpts ConvertOptions
+var pageOpts PageOptions
 
-type ConvertOptions struct {
+type PageOptions struct {
 	authOptions
 	commonOptions
 }
 
 func init() {
-	rootCmd.AddCommand(convertCmd)
+	rootCmd.AddCommand(pageCmd)
 
-	convertOpts.authOptions.InitFlags(convertCmd)
-	convertOpts.commonOptions.InitFlags(convertCmd)
+	pageOpts.authOptions.InitFlags(pageCmd)
+	pageOpts.commonOptions.InitFlags(pageCmd)
 
 	// Required flags
-	_ = convertCmd.MarkFlagRequired("api-token")
-	_ = convertCmd.MarkFlagRequired("email")
+	_ = pageCmd.MarkFlagRequired("api-token")
+	_ = pageCmd.MarkFlagRequired("email")
 }
 
-func runConvert(_ *cobra.Command, args []string) error {
+func runPage(_ *cobra.Command, args []string) error {
 	// Get required flags
 	if len(args) < 1 {
 		return fmt.Errorf("missing required argument: page URL")
@@ -65,7 +64,7 @@ func runConvert(_ *cobra.Command, args []string) error {
 	}
 
 	// Create Confluence client
-	client := confluence.NewClient(pageInfo.BaseURL, convertOpts.Email, convertOpts.APIKey)
+	client := confluence.NewClient(pageInfo.BaseURL, pageOpts.Email, pageOpts.APIKey)
 
 	page, err := client.GetPage(pageInfo.PageID)
 	if err != nil {
@@ -73,7 +72,7 @@ func runConvert(_ *cobra.Command, args []string) error {
 	}
 
 	// Create output directory
-	if err := os.MkdirAll(convertOpts.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(pageOpts.OutputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -81,7 +80,7 @@ func runConvert(_ *cobra.Command, args []string) error {
 	result := convertSinglePage(
 		page,
 		pageInfo.BaseURL,
-		convertOpts,
+		pageOpts,
 	)
 
 	// Print results

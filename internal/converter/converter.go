@@ -9,7 +9,6 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
-	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 	"github.com/jackchuka/confluence-md/internal/models"
 )
 
@@ -25,7 +24,8 @@ func NewConverter(imageFolder string) *Converter {
 		converter.WithPlugins(
 			base.NewBasePlugin(),
 			commonmark.NewCommonmarkPlugin(),
-			table.NewTablePlugin(),
+			// official table plugin doesn't handle complex cells well
+			// table.NewTablePlugin(),
 			NewConfluencePlugin(imageFolder),
 		),
 	)

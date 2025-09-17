@@ -81,12 +81,12 @@ type PageConversionResult struct {
 }
 
 // convertSinglePage handles the full conversion pipeline for a single page
-func convertSinglePage(page *models.ConfluencePage, baseURL string, opts ConvertOptions) *PageConversionResult {
+func convertSinglePage(page *models.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
 	return convertSinglePageWithPath(page, baseURL, "", opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
-func convertSinglePageWithPath(page *models.ConfluencePage, baseURL, customOutputPath string, opts ConvertOptions) *PageConversionResult {
+func convertSinglePageWithPath(page *models.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
 		PageID: page.ID,
 		Title:  page.Title,

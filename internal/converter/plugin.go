@@ -33,7 +33,208 @@ func (p *confluencePlugin) Init(conv *converter.Converter) error {
 	conv.Register.RendererFor("ac:emoticon", converter.TagTypeInline, p.handleEmoticon, converter.PriorityStandard)
 	conv.Register.RendererFor("ac:structured-macro", converter.TagTypeBlock, p.handleMacro, converter.PriorityStandard)
 
+	// Register custom table handler with higher priority to override default
+	conv.Register.RendererFor("table", converter.TagTypeBlock, p.handleTable, converter.PriorityEarly)
+
 	return nil
+}
+
+// cellHasComplexContent checks if a single cell contains complex elements
+func (p *confluencePlugin) cellHasComplexContent(cell *html.Node) bool {
+	blockElementCount := 0
+
+	for child := cell.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode {
+			switch child.Data {
+			case "ul", "ol", "div", "blockquote", "pre", "table":
+				// These elements are always considered complex
+				return true
+			case "p", "h1", "h2", "h3", "h4", "h5", "h6":
+				blockElementCount++
+				// If we have more than one block element, it's complex
+				if blockElementCount > 1 {
+					return true
+				}
+				// Check if this block element contains br tags
+				if p.containsBrTags(child) {
+					return true
+				}
+			case "br":
+				// Any br tag at cell level indicates complex formatting
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// containsBrTags checks if a node contains any br tags
+func (p *confluencePlugin) containsBrTags(n *html.Node) bool {
+	if n == nil {
+		return false
+	}
+
+	// Check current node
+	if n.Type == html.ElementNode && n.Data == "br" {
+		return true
+	}
+
+	// Check children recursively
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if p.containsBrTags(child) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// getCellHTMLContent extracts the raw HTML content from a cell, preserving complex structures
+func (p *confluencePlugin) getCellHTMLContent(cell *html.Node) string {
+	var result strings.Builder
+
+	for child := cell.FirstChild; child != nil; child = child.NextSibling {
+		switch child.Type {
+		case html.ElementNode:
+			// Render the child element as HTML
+			var buf strings.Builder
+			_ = html.Render(&buf, child)
+			result.WriteString(buf.String())
+			// Add space between elements but not newline to keep it in one table cell
+			if child.NextSibling != nil {
+				result.WriteString(" ")
+			}
+		case html.TextNode:
+			text := strings.TrimSpace(child.Data)
+			if text != "" {
+				result.WriteString(text)
+				if child.NextSibling != nil {
+					result.WriteString(" ")
+				}
+			}
+		}
+	}
+
+	// Remove newlines to keep content in one table cell
+	content := result.String()
+	content = strings.ReplaceAll(content, "\n", " ")
+	content = strings.ReplaceAll(content, "\r", "")
+	// Clean up multiple spaces
+	content = strings.Join(strings.Fields(content), " ")
+
+	return content
+}
+
+// handleTable converts HTML tables to markdown tables, preserving HTML content for complex cells
+func (p *confluencePlugin) handleTable(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	// Extract table data
+	var rows [][]string
+	var isHeaderRow []bool
+
+	// Find tbody
+	var tbody *html.Node
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode && c.Data == "tbody" {
+			tbody = c
+			break
+		}
+	}
+
+	if tbody == nil {
+		return converter.RenderTryNext // Let default handler try
+	}
+
+	// Process rows
+	for tr := tbody.FirstChild; tr != nil; tr = tr.NextSibling {
+		if tr.Type != html.ElementNode || tr.Data != "tr" {
+			continue
+		}
+
+		var row []string
+		isHeader := false
+
+		for cell := tr.FirstChild; cell != nil; cell = cell.NextSibling {
+			if cell.Type != html.ElementNode {
+				continue
+			}
+
+			if cell.Data == "th" {
+				isHeader = true
+			}
+
+			if cell.Data == "td" || cell.Data == "th" {
+				var cellContent string
+
+				if p.cellHasComplexContent(cell) {
+					// For complex cells, preserve the HTML content
+					cellContent = p.getCellHTMLContent(cell)
+				} else {
+					// For simple cells, convert to markdown
+					var buf strings.Builder
+					if cell.FirstChild != nil {
+						ctx.RenderNodes(ctx, &buf, cell.FirstChild)
+					}
+					cellContent = strings.TrimSpace(buf.String())
+				}
+
+				// Handle empty cells
+				if cellContent == "" || cellContent == "&nbsp;" {
+					cellContent = " "
+				}
+
+				row = append(row, cellContent)
+			}
+		}
+
+		if len(row) > 0 {
+			rows = append(rows, row)
+			isHeaderRow = append(isHeaderRow, isHeader)
+		}
+	}
+
+	if len(rows) == 0 {
+		return converter.RenderTryNext
+	}
+
+	// Determine max columns
+	maxCols := 0
+	for _, row := range rows {
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+	}
+
+	// Pad rows to have same number of columns
+	for i := range rows {
+		for len(rows[i]) < maxCols {
+			rows[i] = append(rows[i], " ")
+		}
+	}
+
+	// Write table
+	for i, row := range rows {
+		_, _ = w.WriteString("| ")
+		for j, cell := range row {
+			_, _ = w.WriteString(cell)
+			if j < len(row)-1 {
+				_, _ = w.WriteString(" | ")
+			}
+		}
+		_, _ = w.WriteString(" |\n")
+
+		// Add separator after header row
+		if i == 0 && isHeaderRow[0] {
+			_, _ = w.WriteString("|")
+			for j := 0; j < maxCols; j++ {
+				_, _ = w.WriteString("---|")
+			}
+			_, _ = w.WriteString("\n")
+		}
+	}
+
+	_, _ = w.WriteString("\n")
+	return converter.RenderSuccess
 }
 
 // handleImage converts Confluence images to markdown

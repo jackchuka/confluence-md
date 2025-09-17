@@ -35,13 +35,13 @@ You'll need:
 ### Convert a Single Page
 
 ```bash
-confluence-md convert <page-url> --email your-email@example.com --api-token your-api-token
+confluence-md page <page-url> --email your-email@example.com --api-token your-api-token
 ```
 
 Example:
 
 ```bash
-confluence-md convert https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title \
+confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title \
   --email john.doe@company.com \
   --api-token your-api-token-here
 ```
@@ -65,10 +65,10 @@ confluence-md tree <page-url> --email your-email@example.com --api-token your-ap
 
 ```bash
 # Convert to a specific directory
-confluence-md convert <page-url> --email user@example.com --api-token token --output ./docs
+confluence-md page <page-url> --email user@example.com --api-token token --output ./docs
 
 # Convert without downloading images
-confluence-md convert <page-url> --email user@example.com --api-token token --download-images=false
+confluence-md page <page-url> --email user@example.com --api-token token --download-images=false
 
 # Convert entire page tree
 confluence-md tree <page-url> --email user@example.com --api-token token --output ./wiki

@@ -16,7 +16,7 @@ A CLI tool to convert Confluence pages to Markdown format.
 Supports single page conversion and page tree conversion.
 
 Examples:
-  confluence-md convert <page-url>
+  confluence-md page <page-url>
   confluence-md tree <page-url>
   confluence-md version`,
 
