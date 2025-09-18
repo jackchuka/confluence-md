@@ -1,5 +1,9 @@
 # confluence-md
 
+[![Test](https://github.com/jackchuka/confluence-md/workflows/Test/badge.svg)](https://github.com/jackchuka/confluence-md/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/jackchuka/confluence-md)](https://goreportcard.com/report/github.com/jackchuka/confluence-md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A CLI tool to convert Confluence pages to Markdown format with support for images and page trees.
 
 ## Features
