@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,37 +71,61 @@ func (c *Client) GetPage(pageID string) (*models.ConfluencePage, error) {
 	return page, nil
 }
 
+const defaultChildPageLimit = 100
+
 // GetChildPages retrieves all child pages for a given page ID
 func (c *Client) GetChildPages(pageID string) ([]*models.ConfluencePage, error) {
 	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s/child/page", pageID)
 	params := url.Values{
 		"expand": []string{"body.storage,metadata.labels,version,space,history"},
+		"limit":  []string{strconv.Itoa(defaultChildPageLimit)},
 	}
 
-	fullURL := c.baseURL + endpoint + "?" + params.Encode()
-
-	resp, err := c.makeRequest("GET", fullURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get child pages for %s: %w", pageID, err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp, fmt.Sprintf("get child pages for %s", pageID))
-	}
-
-	var searchResult ConfluenceSearchResult
-	if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
-		return nil, fmt.Errorf("failed to decode child pages response: %w", err)
-	}
-
-	// Convert pages to our model
 	var childPages []*models.ConfluencePage
-	for _, apiPage := range searchResult.Results {
-		page := convertAPIPageToModel(&apiPage)
-		childPages = append(childPages, page)
+	start := 0
+
+	for {
+		params.Set("start", strconv.Itoa(start))
+		fullURL := c.baseURL + endpoint + "?" + params.Encode()
+
+		resp, err := c.makeRequest("GET", fullURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get child pages for %s: %w", pageID, err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			err := c.handleErrorResponse(resp, fmt.Sprintf("get child pages for %s", pageID))
+			_ = resp.Body.Close()
+			return nil, err
+		}
+
+		var searchResult ConfluenceSearchResult
+		if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode child pages response: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		for _, apiPage := range searchResult.Results {
+			page := convertAPIPageToModel(&apiPage)
+			childPages = append(childPages, page)
+		}
+
+		count := len(searchResult.Results)
+		if count == 0 {
+			break
+		}
+
+		limit := searchResult.Limit
+		if limit <= 0 {
+			limit = defaultChildPageLimit
+		}
+
+		if count < limit {
+			break
+		}
+
+		start += limit
 	}
 
 	return childPages, nil
