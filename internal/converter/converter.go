@@ -9,20 +9,24 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
-	"github.com/jackchuka/confluence-md/internal/attachments"
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/confluence/client"
+	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
+	"github.com/jackchuka/confluence-md/internal/converter/model"
+	"github.com/jackchuka/confluence-md/internal/converter/plugin"
+	"github.com/jackchuka/confluence-md/internal/converter/plugin/attachments"
 )
 
 // Converter handles HTML to Markdown conversion
 type Converter struct {
 	mdConverter *converter.Converter
 	imageFolder string
-	plugin      *confluencePlugin
+	plugin      *plugin.ConfluencePlugin
 }
 
 // NewConverter creates a new HTML to Markdown converter
-func NewConverter(resolver attachments.Resolver, imageFolder string) *Converter {
-	plugin := NewConfluencePlugin(resolver, imageFolder)
+func NewConverter(client *client.Client, imageFolder string) *Converter {
+	resolver := attachments.NewService(client)
+	plugin := plugin.NewConfluencePlugin(resolver, imageFolder)
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
@@ -40,37 +44,22 @@ func NewConverter(resolver attachments.Resolver, imageFolder string) *Converter 
 	}
 }
 
-// ConvertHtml converts HTML string to Markdown (for testing)
-func (c *Converter) ConvertHtml(html string) (string, error) {
-	// Preprocess CDATA content before HTML parsing strips it
-	processedHTML := c.preprocessCDATA(html)
-
-	md, err := c.mdConverter.ConvertString(processedHTML)
-	if err != nil {
-		fmt.Printf("Conversion error: %v\n", err)
-	}
-	return c.postprocessMarkdown(md), nil
-}
-
 // ConvertPage converts a Confluence page to Markdown
-func (c *Converter) ConvertPage(page *models.ConfluencePage, baseURL string) (*models.MarkdownDocument, error) {
+func (c *Converter) ConvertPage(page *confluenceModel.ConfluencePage, baseURL string) (*model.MarkdownDocument, error) {
 	if err := page.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid page: %w", err)
 	}
-
-	if c.plugin != nil {
-		c.plugin.SetCurrentPage(page)
-	}
+	c.plugin.SetCurrentPage(page)
 
 	// Create markdown document
-	doc, err := models.NewMarkdownDocument(page, baseURL)
+	doc, err := model.NewMarkdownDocument(page, baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create markdown document: %w", err)
 	}
 
 	htmlContent := page.Content.Storage.Value
 
-	markdown, err := c.ConvertHtml(htmlContent)
+	markdown, err := c.convertHtml(htmlContent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert HTML to Markdown: %w", err)
 	}
@@ -80,6 +69,18 @@ func (c *Converter) ConvertPage(page *models.ConfluencePage, baseURL string) (*m
 	doc.Images = imageRefs
 
 	return doc, nil
+}
+
+// convertHtml converts HTML string to Markdown (for testing)
+func (c *Converter) convertHtml(html string) (string, error) {
+	// Preprocess CDATA content before HTML parsing strips it
+	processedHTML := c.preprocessCDATA(html)
+
+	md, err := c.mdConverter.ConvertString(processedHTML)
+	if err != nil {
+		fmt.Printf("Conversion error: %v\n", err)
+	}
+	return c.postprocessMarkdown(md), nil
 }
 
 // postprocessMarkdown cleans up the converted Markdown
@@ -100,15 +101,15 @@ func (c *Converter) postprocessMarkdown(markdown string) string {
 }
 
 // extractImageReferences finds all images in the HTML and creates ImageRef objects
-func (c *Converter) extractImageReferences(html, pageID, baseURL string) []models.ImageRef {
-	var imageRefs []models.ImageRef
+func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model.ImageRef {
+	var imageRefs []model.ImageRef
 
 	// Find all Confluence ac:image elements
 	acImageRegex := regexp.MustCompile(`<ac:image[^>]*>[\s\S]*?</ac:image>`)
 	matches := acImageRegex.FindAllString(html, -1)
 
 	for _, imageHTML := range matches {
-		fileName := parseConfluenceImage(imageHTML)
+		fileName := plugin.ParseConfluenceImage(imageHTML)
 
 		if fileName == "" {
 			continue
@@ -122,7 +123,7 @@ func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model
 
 		localPath := c.imageFolder + "/" + fileName
 
-		imageRef := models.ImageRef{
+		imageRef := model.ImageRef{
 			OriginalURL: actualURL,
 			LocalPath:   localPath,
 			FileName:    fileName,

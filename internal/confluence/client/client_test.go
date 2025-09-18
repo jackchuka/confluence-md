@@ -1,4 +1,4 @@
-package confluence
+package client
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/version"
 )
 
@@ -50,7 +50,7 @@ func TestNewClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewClient(tt.baseURL, "user", "token")
+			c := New(tt.baseURL, "user", "token")
 			if c.baseURL != tt.wantBaseURL {
 				t.Fatalf("baseURL = %s, want %s", c.baseURL, tt.wantBaseURL)
 			}
@@ -161,7 +161,7 @@ func TestClient_GetPage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("https://example.atlassian.net", "user", "token")
+			client := New("https://example.atlassian.net", "user", "token")
 			client.httpClient = &http.Client{Transport: tt.transport}
 
 			page, err := client.GetPage("123")
@@ -198,7 +198,7 @@ func TestClient_GetPage(t *testing.T) {
 }
 
 func TestClientDownloadAttachmentContent(t *testing.T) {
-	attachment := &models.ConfluenceAttachment{
+	attachment := &model.ConfluenceAttachment{
 		Title:        "diagram.mmd",
 		DownloadLink: "/download/attachments/123/diagram.mmd",
 	}
@@ -216,7 +216,7 @@ func TestClientDownloadAttachmentContent(t *testing.T) {
 		}, nil
 	})
 
-	client := NewClient("https://example.atlassian.net", "user", "token")
+	client := New("https://example.atlassian.net", "user", "token")
 	client.httpClient = &http.Client{Transport: transport}
 
 	data, err := client.DownloadAttachmentContent(attachment)
@@ -229,7 +229,7 @@ func TestClientDownloadAttachmentContent(t *testing.T) {
 }
 
 func TestNormalizeDownloadLink(t *testing.T) {
-	client := NewClient("https://example.atlassian.net", "user", "token")
+	client := New("https://example.atlassian.net", "user", "token")
 
 	tests := []struct {
 		input string
@@ -365,7 +365,7 @@ func TestClient_GetChildPages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("https://example.atlassian.net", "user", "token")
+			client := New("https://example.atlassian.net", "user", "token")
 			client.httpClient = &http.Client{Transport: tt.transport}
 
 			pages, err := client.GetChildPages("parent")
@@ -426,7 +426,7 @@ func TestHandleErrorResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewClient("https://example", "user", "token")
+			c := New("https://example", "user", "token")
 			resp := &http.Response{
 				StatusCode: tt.status,
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
@@ -482,62 +482,8 @@ func TestConvertAPIPageToModel(t *testing.T) {
 	}
 }
 
-func TestParseURL(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    models.PageURLInfo
-		wantErr string
-	}{
-		{
-			name:  "valid url",
-			input: "https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title",
-			want: models.PageURLInfo{
-				BaseURL:  "https://example.atlassian.net",
-				SpaceKey: "SPACE",
-				PageID:   "12345",
-				Title:    "Title",
-			},
-		},
-		{
-			name:    "empty",
-			input:   "",
-			wantErr: "URL is empty",
-		},
-		{
-			name:    "invalid",
-			input:   "://bad url",
-			wantErr: "invalid URL",
-		},
-		{
-			name:    "missing id",
-			input:   "https://example.atlassian.net/wiki/spaces/SPACE/pages//Title",
-			wantErr: "could not extract page ID",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseURL(tt.input)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("unexpected info: %#v want %#v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestClient_makeRequestSetsHeaders(t *testing.T) {
-	client := NewClient("https://example", "user", "token")
+	client := New("https://example", "user", "token")
 	client.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if ua := r.Header.Get("User-Agent"); !strings.HasPrefix(ua, "ConfluenceMd/") {
 			t.Fatalf("unexpected user agent: %s", ua)
@@ -580,7 +526,7 @@ func TestClient_makeRequestSetsHeaders(t *testing.T) {
 }
 
 func TestHandleErrorResponseReadFailure(t *testing.T) {
-	client := NewClient("https://example", "user", "token")
+	client := New("https://example", "user", "token")
 	brokenBody := io.NopCloser(io.MultiReader(&failingReader{}))
 	resp := &http.Response{
 		StatusCode: http.StatusTeapot,
@@ -597,14 +543,4 @@ type failingReader struct{}
 
 func (f *failingReader) Read(p []byte) (int, error) {
 	return 0, errors.New("read error")
-}
-
-func TestParseURLHandlesEncodedTitle(t *testing.T) {
-	info, err := ParseURL("https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/My%20Title")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info.Title != "My Title" {
-		t.Fatalf("expected decoded title, got %s", info.Title)
-	}
 }

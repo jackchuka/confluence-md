@@ -1,9 +1,11 @@
-package models
+package model
 
 import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 )
 
 // MarkdownDocument represents the output document structure
@@ -77,7 +79,7 @@ func (md *MarkdownDocument) WithFrontmatter() (string, error) {
 }
 
 // NewMarkdownDocument creates a new MarkdownDocument from a ConfluencePage
-func NewMarkdownDocument(page *ConfluencePage, baseURL string) (*MarkdownDocument, error) {
+func NewMarkdownDocument(page *model.ConfluencePage, baseURL string) (*MarkdownDocument, error) {
 	pageURL, err := page.GetURL(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate page URL: %w", err)

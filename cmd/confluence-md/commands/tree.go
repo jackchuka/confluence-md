@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackchuka/confluence-md/internal/confluence"
+	"github.com/jackchuka/confluence-md/internal/confluence/client"
 	"github.com/spf13/cobra"
 )
 
@@ -81,7 +82,7 @@ func runTreeCommand(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid options: %w", err)
 	}
 
-	client := confluence.NewClient(pageInfo.BaseURL, treeOpts.Email, treeOpts.APIKey)
+	client := client.New(pageInfo.BaseURL, treeOpts.Email, treeOpts.APIKey)
 
 	if treeOpts.DryRun {
 		fmt.Println("🔍 Dry run mode - analyzing page tree...")
@@ -105,7 +106,7 @@ func validateTreeOptions() error {
 	return nil
 }
 
-func performDryRun(client *confluence.Client, rootPageID string, opts *TreeOptions) error {
+func performDryRun(client *client.Client, rootPageID string, opts *TreeOptions) error {
 	fmt.Println("\n📊 Page tree structure:")
 
 	// Fetch and display tree structure
@@ -127,7 +128,7 @@ func performDryRun(client *confluence.Client, rootPageID string, opts *TreeOptio
 	return nil
 }
 
-func performTreeConversion(client *confluence.Client, baseURL, rootPageID string, opts *TreeOptions) error {
+func performTreeConversion(client *client.Client, baseURL, rootPageID string, opts *TreeOptions) error {
 	// Create output directory
 	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -184,11 +185,11 @@ type ConversionResults struct {
 	Errors  []error
 }
 
-func fetchPageTree(client *confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string) (*PageNode, error) {
+func fetchPageTree(client *client.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string) (*PageNode, error) {
 	return fetchPageTreeWithParent(client, pageID, maxDepth, currentDepth, excludePatterns, nil, []string{})
 }
 
-func fetchPageTreeWithParent(client *confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string, parent *PageNode, parentPath []string) (*PageNode, error) {
+func fetchPageTreeWithParent(client *client.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string, parent *PageNode, parentPath []string) (*PageNode, error) {
 	// Check depth limit
 	if maxDepth != -1 && currentDepth > maxDepth {
 		return nil, nil
@@ -300,7 +301,7 @@ func calculateTreeStats(node *PageNode) *TreeStats {
 	return stats
 }
 
-func convertPageTree(client *confluence.Client, node *PageNode, outputDir string, baseURL string, opts *TreeOptions, results *ConversionResults) error {
+func convertPageTree(client *client.Client, node *PageNode, outputDir string, baseURL string, opts *TreeOptions, results *ConversionResults) error {
 	if node == nil {
 		return nil
 	}

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/converter/model"
 )
 
 // Downloader handles downloading images and attachments
@@ -32,7 +32,7 @@ func NewDownloader(email, apiToken string) *Downloader {
 }
 
 // DownloadImages downloads all images referenced in a markdown document
-func (d *Downloader) DownloadImages(doc *models.MarkdownDocument, outputDir string) error {
+func (d *Downloader) DownloadImages(doc *model.MarkdownDocument, outputDir string) error {
 	if len(doc.Images) == 0 {
 		return nil
 	}
@@ -55,7 +55,7 @@ func (d *Downloader) DownloadImages(doc *models.MarkdownDocument, outputDir stri
 }
 
 // downloadImage downloads a single image
-func (d *Downloader) downloadImage(imageRef *models.ImageRef, outputDir string) error {
+func (d *Downloader) downloadImage(imageRef *model.ImageRef, outputDir string) error {
 	// Create HTTP request
 	req, err := http.NewRequest("GET", imageRef.OriginalURL, nil)
 	if err != nil {

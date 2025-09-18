@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 
 	"github.com/gosimple/slug"
-	"github.com/jackchuka/confluence-md/internal/attachments"
-	"github.com/jackchuka/confluence-md/internal/confluence"
+	"github.com/jackchuka/confluence-md/internal/confluence/client"
+	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter"
+	"github.com/jackchuka/confluence-md/internal/converter/model"
 	"github.com/jackchuka/confluence-md/internal/downloader"
-	"github.com/jackchuka/confluence-md/internal/models"
 )
 
 // sanitizeFileName uses the mature gosimple/slug library for robust filename sanitization
@@ -28,7 +28,7 @@ func sanitizeFileName(name string) string {
 	return sanitized
 }
 
-func downloadImages(doc *models.MarkdownDocument, email, apiToken string, outputDir string) error {
+func downloadImages(doc *model.MarkdownDocument, email, apiToken string, outputDir string) error {
 	if len(doc.Images) == 0 {
 		return nil
 	}
@@ -42,7 +42,7 @@ func downloadImages(doc *models.MarkdownDocument, email, apiToken string, output
 }
 
 // saveMarkdownDocumentWithOptions saves a markdown document with configurable frontmatter
-func saveMarkdownDocumentWithOptions(doc *models.MarkdownDocument, outputPath string, includeFrontmatter bool) error {
+func saveMarkdownDocumentWithOptions(doc *model.MarkdownDocument, outputPath string, includeFrontmatter bool) error {
 	// Create directory if needed
 	dir := filepath.Dir(outputPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -83,19 +83,19 @@ type PageConversionResult struct {
 }
 
 // convertSinglePage handles the full conversion pipeline for a single page
-func convertSinglePage(client *confluence.Client, page *models.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
+func convertSinglePage(client *client.Client, page *confluenceModel.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
 	return convertSinglePageWithPath(client, page, baseURL, "", opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
-func convertSinglePageWithPath(client *confluence.Client, page *models.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
+func convertSinglePageWithPath(client *client.Client, page *confluenceModel.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
 		PageID: page.ID,
 		Title:  page.Title,
 	}
 
 	// Create converter and convert page
-	conv := converter.NewConverter(attachments.NewService(client), opts.ImageFolder)
+	conv := converter.NewConverter(client, opts.ImageFolder)
 	doc, err := conv.ConvertPage(page, baseURL)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to convert page: %w", err)

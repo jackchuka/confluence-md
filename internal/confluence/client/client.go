@@ -1,4 +1,4 @@
-package confluence
+package client
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/version"
 )
 
@@ -23,8 +23,8 @@ type Client struct {
 	userAgent  string
 }
 
-// NewClient creates a new Confluence API client
-func NewClient(baseURL, email, apiToken string) *Client {
+// New creates a new Confluence API client
+func New(baseURL, email, apiToken string) *Client {
 	return &Client{
 		baseURL:  strings.TrimSuffix(baseURL, "/"),
 		email:    email,
@@ -37,7 +37,7 @@ func NewClient(baseURL, email, apiToken string) *Client {
 }
 
 // GetPage retrieves a Confluence page by ID
-func (c *Client) GetPage(pageID string) (*models.ConfluencePage, error) {
+func (c *Client) GetPage(pageID string) (*model.ConfluencePage, error) {
 	// Build URL with expansions to get all needed data
 	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s", pageID)
 	params := url.Values{
@@ -74,14 +74,14 @@ func (c *Client) GetPage(pageID string) (*models.ConfluencePage, error) {
 const defaultChildPageLimit = 100
 
 // GetChildPages retrieves all child pages for a given page ID
-func (c *Client) GetChildPages(pageID string) ([]*models.ConfluencePage, error) {
+func (c *Client) GetChildPages(pageID string) ([]*model.ConfluencePage, error) {
 	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s/child/page", pageID)
 	params := url.Values{
 		"expand": []string{"body.storage,metadata.labels,version,space,history"},
 		"limit":  []string{strconv.Itoa(defaultChildPageLimit)},
 	}
 
-	var childPages []*models.ConfluencePage
+	var childPages []*model.ConfluencePage
 	start := 0
 
 	for {
@@ -153,7 +153,7 @@ func (c *Client) makeRequest(method, url string, body io.Reader) (*http.Response
 }
 
 // DownloadAttachmentContent downloads attachment binary content
-func (c *Client) DownloadAttachmentContent(attachment *models.ConfluenceAttachment) ([]byte, error) {
+func (c *Client) DownloadAttachmentContent(attachment *model.ConfluenceAttachment) ([]byte, error) {
 	if attachment == nil {
 		return nil, fmt.Errorf("attachment is nil")
 	}
@@ -320,19 +320,19 @@ type ConfluenceErrorResponse struct {
 }
 
 // convertAPIPageToModel converts the API response to our domain model
-func convertAPIPageToModel(apiPage *ConfluenceAPIPage) *models.ConfluencePage {
+func convertAPIPageToModel(apiPage *ConfluenceAPIPage) *model.ConfluencePage {
 	// Convert labels
-	var labels []models.Label
+	var labels []model.Label
 	for _, apiLabel := range apiPage.Metadata.Labels.Results {
-		labels = append(labels, models.Label{
+		labels = append(labels, model.Label{
 			ID:   apiLabel.ID,
 			Name: apiLabel.Name,
 		})
 	}
 
-	var attachments []models.ConfluenceAttachment
+	var attachments []model.ConfluenceAttachment
 	for _, att := range apiPage.Children.Attachment.Results {
-		attachments = append(attachments, models.ConfluenceAttachment{
+		attachments = append(attachments, model.ConfluenceAttachment{
 			ID:           att.ID,
 			Title:        att.Title,
 			MediaType:    att.Extensions.MediaType,
@@ -342,30 +342,30 @@ func convertAPIPageToModel(apiPage *ConfluenceAPIPage) *models.ConfluencePage {
 		})
 	}
 
-	return &models.ConfluencePage{
+	return &model.ConfluencePage{
 		ID:       apiPage.ID,
 		Title:    apiPage.Title,
 		SpaceKey: apiPage.Space.Key,
 		Version:  apiPage.Version.Number,
-		Content: models.ConfluenceContent{
-			Storage: models.ContentStorage{
+		Content: model.ConfluenceContent{
+			Storage: model.ContentStorage{
 				Value:          apiPage.Body.Storage.Value,
 				Representation: apiPage.Body.Storage.Representation,
 			},
 		},
-		Metadata: models.ConfluenceMetadata{
+		Metadata: model.ConfluenceMetadata{
 			Labels:     labels,
 			Properties: make(map[string]string), // TODO: Extract properties if needed
 		},
 		Attachments: attachments,
 		CreatedAt:   apiPage.History.CreatedDate,
 		UpdatedAt:   apiPage.Version.When,
-		CreatedBy: models.User{
+		CreatedBy: model.User{
 			AccountID:   apiPage.History.CreatedBy.AccountID,
 			DisplayName: apiPage.History.CreatedBy.DisplayName,
 			Email:       apiPage.History.CreatedBy.Email,
 		},
-		UpdatedBy: models.User{
+		UpdatedBy: model.User{
 			AccountID:   apiPage.Version.By.AccountID,
 			DisplayName: apiPage.Version.By.DisplayName,
 			Email:       apiPage.Version.By.Email,

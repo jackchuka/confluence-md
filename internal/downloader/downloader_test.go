@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/converter/model"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -21,8 +21,8 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 func TestDownloadImages(t *testing.T) {
 	data := bytes.Repeat([]byte("a"), 8)
 
-	doc := &models.MarkdownDocument{
-		Images: []models.ImageRef{{
+	doc := &model.MarkdownDocument{
+		Images: []model.ImageRef{{
 			OriginalURL: "https://example.com/image.png",
 			LocalPath:   "assets/image.png",
 			FileName:    "image.png",
@@ -89,8 +89,8 @@ func TestDownloadImagesHandlesErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doc := &models.MarkdownDocument{
-				Images: []models.ImageRef{{
+			doc := &model.MarkdownDocument{
+				Images: []model.ImageRef{{
 					OriginalURL: "https://example.com/image.png",
 					LocalPath:   "assets/image.png",
 					FileName:    "image.png",
@@ -111,7 +111,7 @@ func TestDownloadImagesHandlesErrors(t *testing.T) {
 
 func TestDownloadImagesSkipsWhenNoImages(t *testing.T) {
 	d := NewDownloader("user", "token")
-	if err := d.DownloadImages(&models.MarkdownDocument{}, t.TempDir()); err != nil {
+	if err := d.DownloadImages(&model.MarkdownDocument{}, t.TempDir()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

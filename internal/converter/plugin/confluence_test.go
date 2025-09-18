@@ -1,4 +1,4 @@
-package converter
+package plugin
 
 import (
 	"fmt"
@@ -8,11 +8,11 @@ import (
 	htmldom "golang.org/x/net/html"
 
 	convpkg "github.com/JohannesKaufmann/html-to-markdown/v2/converter"
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 )
 
 func TestCellHasComplexContent(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 
 	tests := []struct {
 		name string
@@ -53,7 +53,7 @@ func TestCellHasComplexContent(t *testing.T) {
 }
 
 func TestContainsBrTags(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<p>Line<br/>Break</p>`, "p")
 	if !plugin.containsBrTags(node) {
 		t.Fatalf("expected br detection")
@@ -64,7 +64,7 @@ func TestContainsBrTags(t *testing.T) {
 }
 
 func TestGetCellHTMLContent(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	cell := findNode(t, `<table><tbody><tr><td><p>Text</p><a href="/link">Link</a></td></tr></tbody></table>`, "td")
 	got := plugin.getCellHTMLContent(cell)
 	if !strings.Contains(got, "<p>Text</p>") || !strings.Contains(got, "<a href=\"/link\">Link</a>") {
@@ -73,7 +73,7 @@ func TestGetCellHTMLContent(t *testing.T) {
 }
 
 func TestHandleImage(t *testing.T) {
-	plugin := &confluencePlugin{imageFolder: "images"}
+	plugin := &ConfluencePlugin{imageFolder: "images"}
 	node := findNode(t, `<ac:image ri:filename="diagram.png"></ac:image>`, "ac:image")
 	var out strings.Builder
 	status := plugin.handleImage(nil, &out, node)
@@ -86,7 +86,7 @@ func TestHandleImage(t *testing.T) {
 }
 
 func TestHandleEmoticon(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:emoticon ac:emoji-fallback="😊"></ac:emoticon>`, "ac:emoticon")
 	var out strings.Builder
 	status := plugin.handleEmoticon(nil, &out, node)
@@ -99,7 +99,7 @@ func TestHandleEmoticon(t *testing.T) {
 }
 
 func TestHandleTocMacro(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:structured-macro ac:name="toc" />`, "ac:structured-macro")
 	result, tryNext := plugin.handleTocMacro(node)
 	if result != "<!-- Table of Contents -->" || !tryNext {
@@ -117,7 +117,7 @@ func TestHandleTocMacro(t *testing.T) {
 }
 
 func TestHandleCodeMacro(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">go</ac:parameter><ac:plain-text-body><!--[CDATA[fmt.Println(&quot;ok&quot;)]]></ac:plain-text-body></ac:structured-macro>`, "ac:structured-macro")
 	result := plugin.handleCodeMacro(node)
 	expected := "```go\nfmt.Println(\"ok\")\n```\n"
@@ -127,9 +127,10 @@ func TestHandleCodeMacro(t *testing.T) {
 }
 
 func TestHandleMermaidCloudMacro(t *testing.T) {
-	plugin := &confluencePlugin{}
-	plugin.SetCurrentPage(&models.ConfluencePage{ID: "123"})
-	plugin.SetAttachmentResolver(&stubResolver{expectedPageID: "123", expectedFilename: "diagram", expectedRevision: 2, content: "graph TD;\nA-->B;"})
+	plugin := &ConfluencePlugin{
+		attachmentResolver: &stubResolver{expectedPageID: "123", expectedFilename: "diagram", expectedRevision: 2, content: "graph TD;\nA-->B;"},
+	}
+	plugin.SetCurrentPage(&model.ConfluencePage{ID: "123"})
 	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter><ac:parameter ac:name="revision">2</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
 	result := plugin.handleMermaidMacro(node)
 	expected := "```mermaid\ngraph TD;\nA-->B;\n```\n"
@@ -139,8 +140,8 @@ func TestHandleMermaidCloudMacro(t *testing.T) {
 }
 
 func TestHandleMermaidCloudMacroMissingResolver(t *testing.T) {
-	plugin := &confluencePlugin{}
-	plugin.SetCurrentPage(&models.ConfluencePage{ID: "123"})
+	plugin := &ConfluencePlugin{}
+	plugin.SetCurrentPage(&model.ConfluencePage{ID: "123"})
 	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
 	result := plugin.handleMermaidMacro(node)
 	if !strings.Contains(result, "Mermaid attachment diagram unavailable") {
@@ -155,7 +156,7 @@ type stubResolver struct {
 	content          string
 }
 
-func (s *stubResolver) Resolve(page *models.ConfluencePage, filename string, revision int) (string, error) {
+func (s *stubResolver) Resolve(page *model.ConfluencePage, filename string, revision int) (string, error) {
 	if page == nil || page.ID != s.expectedPageID {
 		return "", fmt.Errorf("unexpected page %v", page)
 	}

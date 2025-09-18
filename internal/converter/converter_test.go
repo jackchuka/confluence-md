@@ -5,35 +5,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackchuka/confluence-md/internal/models"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 )
 
 func TestConverterConvertPage(t *testing.T) {
 	conv := NewConverter(nil, "images")
 
-	page := &models.ConfluencePage{
+	page := &model.ConfluencePage{
 		ID:       "123",
 		Title:    "Sample Page",
 		SpaceKey: "SPACE",
 		Version:  1,
-		Content: models.ConfluenceContent{
-			Storage: models.ContentStorage{
+		Content: model.ConfluenceContent{
+			Storage: model.ContentStorage{
 				Value: "<p>Hello World</p><ac:image ri:filename=\"diagram.png\"></ac:image>",
 			},
 		},
-		Metadata: models.ConfluenceMetadata{
-			Labels: []models.Label{{Name: "Label"}},
+		Metadata: model.ConfluenceMetadata{
+			Labels: []model.Label{{Name: "Label"}},
 		},
-		CreatedBy: models.User{DisplayName: "Author"},
+		CreatedBy: model.User{DisplayName: "Author"},
 		UpdatedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 	}
 	page.Content.Storage.Representation = "storage"
 	page.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	page.UpdatedBy = models.User{DisplayName: "Editor"}
+	page.UpdatedBy = model.User{DisplayName: "Editor"}
 
 	tests := []struct {
 		name    string
-		page    *models.ConfluencePage
+		page    *model.ConfluencePage
 		wantErr string
 	}{
 		{
@@ -42,7 +42,7 @@ func TestConverterConvertPage(t *testing.T) {
 		},
 		{
 			name:    "invalid page",
-			page:    &models.ConfluencePage{Title: "Missing ID", Content: models.ConfluenceContent{Storage: models.ContentStorage{Value: "<p>content</p>"}}, SpaceKey: "SPACE"},
+			page:    &model.ConfluencePage{Title: "Missing ID", Content: model.ConfluenceContent{Storage: model.ContentStorage{Value: "<p>content</p>"}}, SpaceKey: "SPACE"},
 			wantErr: "page ID cannot be empty",
 		},
 	}
