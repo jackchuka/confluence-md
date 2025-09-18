@@ -9,7 +9,7 @@ import (
 )
 
 func TestConverterConvertPage(t *testing.T) {
-	conv := NewConverter("images")
+	conv := NewConverter(nil, "images")
 
 	page := &models.ConfluencePage{
 		ID:       "123",
@@ -88,7 +88,7 @@ func TestConverterConvertPage(t *testing.T) {
 }
 
 func TestConverterPostprocessMarkdown(t *testing.T) {
-	conv := NewConverter("images")
+	conv := NewConverter(nil, "images")
 
 	tests := []struct {
 		name  string
@@ -123,7 +123,7 @@ func TestConverterPostprocessMarkdown(t *testing.T) {
 }
 
 func TestConverterPreprocessCDATA(t *testing.T) {
-	conv := NewConverter("images")
+	conv := NewConverter(nil, "images")
 	input := "<![CDATA[<tag>&value]]>"
 	got := conv.preprocessCDATA(input)
 	if !strings.Contains(got, "<pre data-cdata='true'>") {
@@ -138,7 +138,7 @@ func TestConverterPreprocessCDATA(t *testing.T) {
 }
 
 func TestExtractorImageReferences(t *testing.T) {
-	conv := NewConverter("assets")
+	conv := NewConverter(nil, "assets")
 	html := `<ac:image ri:filename="one.png"></ac:image><ac:image>missing</ac:image><ac:image ri:filename="two space.png"></ac:image>`
 
 	images := conv.extractImageReferences(html, "123", "https://example.atlassian.net")

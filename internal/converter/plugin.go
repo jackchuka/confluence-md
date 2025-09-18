@@ -3,22 +3,38 @@ package converter
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/jackchuka/confluence-md/internal/attachments"
+	"github.com/jackchuka/confluence-md/internal/models"
 	"golang.org/x/net/html"
 )
 
 type confluencePlugin struct {
-	imageFolder string
+	imageFolder        string
+	attachmentResolver attachments.Resolver
+	currentPage        *models.ConfluencePage
 }
 
 // NewConfluencePlugin creates a new plugin for Confluence elements
-func NewConfluencePlugin(imageFolder string) converter.Plugin {
+func NewConfluencePlugin(resolver attachments.Resolver, imageFolder string) *confluencePlugin {
 	return &confluencePlugin{
-		imageFolder: imageFolder,
+		imageFolder:        imageFolder,
+		attachmentResolver: resolver,
 	}
+}
+
+// SetAttachmentResolver configures how attachment content is resolved
+func (p *confluencePlugin) SetAttachmentResolver(res attachments.Resolver) {
+	p.attachmentResolver = res
+}
+
+// SetCurrentPage records which page is currently being converted
+func (p *confluencePlugin) SetCurrentPage(page *models.ConfluencePage) {
+	p.currentPage = page
 }
 
 // Name returns the plugin name
@@ -321,6 +337,8 @@ func (p *confluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		result = p.handleBlockquoteMacro(ctx, n, "💡", "Tip")
 	case "code":
 		result = p.handleCodeMacro(n)
+	case "mermaid-cloud":
+		result = p.handleMermaidMacro(n)
 	case "expand":
 		result = p.handleExpandMacro(ctx, n)
 	case "toc":
@@ -375,28 +393,7 @@ func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
 	rawHTML, _ := selection.Html()
 	language := extractLanguageParameter(rawHTML)
 
-	// Extract code content using improved method
-	var code string
-	plainTextBody := selection.Find("ac\\:plain-text-body").First()
-	if plainTextBody.Length() > 0 {
-		// First try the <pre> tag approach for preprocessed CDATA
-		preTag := plainTextBody.Find("pre[data-cdata='true']").First()
-		if preTag.Length() > 0 {
-			code = preTag.Text()
-
-			// Unescape HTML entities from preprocessing
-			code = strings.ReplaceAll(code, "&lt;", "<")
-			code = strings.ReplaceAll(code, "&gt;", ">")
-			code = strings.ReplaceAll(code, "&amp;", "&")
-
-			code = strings.TrimSpace(code)
-		} else {
-			// Fallback to direct extraction using utility function
-			code = extractCodeContent(rawHTML)
-		}
-	}
-
-	// If still no code, try the utility function directly on the raw HTML
+	code := extractPlainTextBodyContent(selection, rawHTML)
 	if code == "" {
 		code = extractCodeContent(rawHTML)
 	}
@@ -405,6 +402,44 @@ func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
 		return fmt.Sprintf("```%s\n%s\n```\n", language, code)
 	}
 	return fmt.Sprintf("```\n%s\n```\n", code)
+}
+
+func (p *confluencePlugin) handleMermaidMacro(n *html.Node) string {
+	var buf strings.Builder
+	_ = html.Render(&buf, n)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(buf.String()))
+	if err != nil {
+		return fmt.Sprintf("<!-- Error rendering macro: %s -->", err.Error())
+	}
+	selection := doc.Selection
+
+	filename := extractMacroParameter(selection, "filename")
+	revisionStr := extractMacroParameter(selection, "revision")
+	revision := 0
+	if revisionStr != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(revisionStr)); err == nil {
+			revision = parsed
+		}
+	}
+
+	if filename == "" {
+		return "<!-- Mermaid macro missing filename -->"
+	}
+	if p.attachmentResolver == nil {
+		return fmt.Sprintf("<!-- Mermaid attachment %s unavailable -->", filename)
+	}
+	if p.currentPage == nil {
+		return fmt.Sprintf("<!-- Mermaid attachment %s unavailable -->", filename)
+	}
+	diagram, err := p.attachmentResolver.Resolve(p.currentPage, filename, revision)
+	if err != nil {
+		return fmt.Sprintf("<!-- Failed to load mermaid %s: %v -->", filename, err)
+	}
+	diagram = strings.TrimSpace(diagram)
+	if diagram == "" {
+		return "<!-- Empty mermaid macro -->"
+	}
+	return fmt.Sprintf("```mermaid\n%s\n```\n", diagram)
 }
 
 func (p *confluencePlugin) handleTocMacro(n *html.Node) (string, bool) {
@@ -494,4 +529,32 @@ func (p *confluencePlugin) findRichTextBodyNode(n *html.Node) *html.Node {
 	}
 
 	return nil
+}
+
+func extractPlainTextBodyContent(selection *goquery.Selection, rawHTML string) string {
+	plainTextBody := selection.Find("ac\\:plain-text-body").First()
+	if plainTextBody.Length() == 0 {
+		return extractCodeContent(rawHTML)
+	}
+
+	preTag := plainTextBody.Find("pre[data-cdata='true']").First()
+	if preTag.Length() > 0 {
+		content := preTag.Text()
+
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&amp;", "&")
+
+		return strings.TrimSpace(content)
+	}
+
+	return extractCodeContent(rawHTML)
+}
+
+func extractMacroParameter(selection *goquery.Selection, name string) string {
+	param := selection.Find(fmt.Sprintf("ac\\:parameter[ac\\:name='%s']", name)).First()
+	if param.Length() == 0 {
+		return ""
+	}
+	return strings.TrimSpace(param.Text())
 }

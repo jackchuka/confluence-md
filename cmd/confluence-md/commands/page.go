@@ -78,6 +78,7 @@ func runPage(_ *cobra.Command, args []string) error {
 
 	// Use shared conversion pipeline
 	result := convertSinglePage(
+		client,
 		page,
 		pageInfo.BaseURL,
 		pageOpts,

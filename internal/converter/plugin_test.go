@@ -1,12 +1,14 @@
 package converter
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	htmldom "golang.org/x/net/html"
 
 	convpkg "github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/jackchuka/confluence-md/internal/models"
 )
 
 func TestCellHasComplexContent(t *testing.T) {
@@ -122,6 +124,45 @@ func TestHandleCodeMacro(t *testing.T) {
 	if result != expected {
 		t.Fatalf("unexpected code block: %q", result)
 	}
+}
+
+func TestHandleMermaidCloudMacro(t *testing.T) {
+	plugin := &confluencePlugin{}
+	plugin.SetCurrentPage(&models.ConfluencePage{ID: "123"})
+	plugin.SetAttachmentResolver(&stubResolver{expectedPageID: "123", expectedFilename: "diagram", expectedRevision: 2, content: "graph TD;\nA-->B;"})
+	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter><ac:parameter ac:name="revision">2</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
+	result := plugin.handleMermaidMacro(node)
+	expected := "```mermaid\ngraph TD;\nA-->B;\n```\n"
+	if result != expected {
+		t.Fatalf("unexpected mermaid cloud block: %q", result)
+	}
+}
+
+func TestHandleMermaidCloudMacroMissingResolver(t *testing.T) {
+	plugin := &confluencePlugin{}
+	plugin.SetCurrentPage(&models.ConfluencePage{ID: "123"})
+	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
+	result := plugin.handleMermaidMacro(node)
+	if !strings.Contains(result, "Mermaid attachment diagram unavailable") {
+		t.Fatalf("expected unavailable message, got %q", result)
+	}
+}
+
+type stubResolver struct {
+	expectedPageID   string
+	expectedFilename string
+	expectedRevision int
+	content          string
+}
+
+func (s *stubResolver) Resolve(page *models.ConfluencePage, filename string, revision int) (string, error) {
+	if page == nil || page.ID != s.expectedPageID {
+		return "", fmt.Errorf("unexpected page %v", page)
+	}
+	if filename != s.expectedFilename || revision != s.expectedRevision {
+		return "", fmt.Errorf("unexpected inputs %s %d", filename, revision)
+	}
+	return s.content, nil
 }
 
 func findNode(t *testing.T, markup, tag string) *htmldom.Node {

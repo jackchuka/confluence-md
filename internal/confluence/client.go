@@ -152,6 +152,77 @@ func (c *Client) makeRequest(method, url string, body io.Reader) (*http.Response
 	return c.httpClient.Do(req)
 }
 
+// DownloadAttachmentContent downloads attachment binary content
+func (c *Client) DownloadAttachmentContent(attachment *models.ConfluenceAttachment) ([]byte, error) {
+	if attachment == nil {
+		return nil, fmt.Errorf("attachment is nil")
+	}
+
+	if attachment.DownloadLink == "" {
+		return nil, fmt.Errorf("attachment %s has no download link", attachment.Title)
+	}
+
+	downloadURL, err := c.normalizeDownloadLink(attachment.DownloadLink)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create attachment request: %w", err)
+	}
+	req.SetBasicAuth(c.email, c.apiToken)
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download attachment: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d while downloading attachment", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read attachment: %w", err)
+	}
+
+	return data, nil
+}
+
+func (c *Client) normalizeDownloadLink(link string) (string, error) {
+	if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+		return link, nil
+	}
+
+	if !strings.HasPrefix(link, "/") {
+		link = "/" + link
+	}
+
+	if strings.HasPrefix(link, "/download/") {
+		link = "/wiki" + link
+	}
+
+	if strings.HasPrefix(link, "download/") {
+		link = "/wiki/" + link
+	}
+
+	if strings.Contains(link, " ") {
+		link = strings.ReplaceAll(link, " ", "%20")
+	}
+
+	full := c.baseURL + link
+	parsed, err := url.Parse(full)
+	if err != nil {
+		return "", fmt.Errorf("invalid attachment url %s: %w", full, err)
+	}
+	return parsed.String(), nil
+}
+
 // handleErrorResponse handles error responses from the API
 func (c *Client) handleErrorResponse(resp *http.Response, operation string) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -213,6 +284,24 @@ type ConfluenceAPIPage struct {
 			} `json:"results"`
 		} `json:"labels"`
 	} `json:"metadata"`
+	Children struct {
+		Attachment struct {
+			Results []struct {
+				ID      string `json:"id"`
+				Title   string `json:"title"`
+				Version struct {
+					Number int `json:"number"`
+				} `json:"version"`
+				Extensions struct {
+					MediaType string `json:"mediaType"`
+					FileSize  int64  `json:"fileSize"`
+				} `json:"extensions"`
+				Links struct {
+					Download string `json:"download"`
+				} `json:"_links"`
+			} `json:"results"`
+		} `json:"attachment"`
+	} `json:"children"`
 }
 
 // ConfluenceSearchResult represents the API response for search queries
@@ -241,6 +330,18 @@ func convertAPIPageToModel(apiPage *ConfluenceAPIPage) *models.ConfluencePage {
 		})
 	}
 
+	var attachments []models.ConfluenceAttachment
+	for _, att := range apiPage.Children.Attachment.Results {
+		attachments = append(attachments, models.ConfluenceAttachment{
+			ID:           att.ID,
+			Title:        att.Title,
+			MediaType:    att.Extensions.MediaType,
+			FileSize:     att.Extensions.FileSize,
+			DownloadLink: att.Links.Download,
+			Version:      att.Version.Number,
+		})
+	}
+
 	return &models.ConfluencePage{
 		ID:       apiPage.ID,
 		Title:    apiPage.Title,
@@ -256,7 +357,7 @@ func convertAPIPageToModel(apiPage *ConfluenceAPIPage) *models.ConfluencePage {
 			Labels:     labels,
 			Properties: make(map[string]string), // TODO: Extract properties if needed
 		},
-		Attachments: []models.ConfluenceAttachment{}, // TODO: Get attachments in separate call if needed
+		Attachments: attachments,
 		CreatedAt:   apiPage.History.CreatedDate,
 		UpdatedAt:   apiPage.Version.When,
 		CreatedBy: models.User{

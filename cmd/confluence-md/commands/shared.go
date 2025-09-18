@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/gosimple/slug"
+	"github.com/jackchuka/confluence-md/internal/attachments"
+	"github.com/jackchuka/confluence-md/internal/confluence"
 	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/jackchuka/confluence-md/internal/downloader"
 	"github.com/jackchuka/confluence-md/internal/models"
@@ -81,19 +83,19 @@ type PageConversionResult struct {
 }
 
 // convertSinglePage handles the full conversion pipeline for a single page
-func convertSinglePage(page *models.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
-	return convertSinglePageWithPath(page, baseURL, "", opts)
+func convertSinglePage(client *confluence.Client, page *models.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
+	return convertSinglePageWithPath(client, page, baseURL, "", opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
-func convertSinglePageWithPath(page *models.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
+func convertSinglePageWithPath(client *confluence.Client, page *models.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
 		PageID: page.ID,
 		Title:  page.Title,
 	}
 
 	// Create converter and convert page
-	conv := converter.NewConverter(opts.ImageFolder)
+	conv := converter.NewConverter(attachments.NewService(client), opts.ImageFolder)
 	doc, err := conv.ConvertPage(page, baseURL)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to convert page: %w", err)

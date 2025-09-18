@@ -91,6 +91,33 @@ func TestClient_GetPage(t *testing.T) {
 		Name   string "json:\"name\""
 		Prefix string "json:\"prefix\""
 	}{{ID: "1", Name: "important"}}
+	apiPage.Children.Attachment.Results = append(apiPage.Children.Attachment.Results, struct {
+		ID      string "json:\"id\""
+		Title   string "json:\"title\""
+		Version struct {
+			Number int "json:\"number\""
+		} "json:\"version\""
+		Extensions struct {
+			MediaType string "json:\"mediaType\""
+			FileSize  int64  "json:\"fileSize\""
+		} "json:\"extensions\""
+		Links struct {
+			Download string "json:\"download\""
+		} "json:\"_links\""
+	}{
+		ID:    "att-1",
+		Title: "diagram.mmd",
+		Version: struct {
+			Number int "json:\"number\""
+		}{Number: 2},
+		Extensions: struct {
+			MediaType string "json:\"mediaType\""
+			FileSize  int64  "json:\"fileSize\""
+		}{MediaType: "text/plain", FileSize: 42},
+		Links: struct {
+			Download string "json:\"download\""
+		}{Download: "/download/attachments/123/diagram.mmd"},
+	})
 
 	transportSuccess := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodGet {
@@ -160,7 +187,80 @@ func TestClient_GetPage(t *testing.T) {
 			if len(page.Metadata.Labels) != 1 || page.Metadata.Labels[0].Name != "important" {
 				t.Fatalf("unexpected labels: %#v", page.Metadata.Labels)
 			}
+			if len(page.Attachments) != 1 {
+				t.Fatalf("expected 1 attachment, got %d", len(page.Attachments))
+			}
+			if page.Attachments[0].Title != "diagram.mmd" || page.Attachments[0].Version != 2 {
+				t.Fatalf("unexpected attachment: %#v", page.Attachments[0])
+			}
 		})
+	}
+}
+
+func TestClientDownloadAttachmentContent(t *testing.T) {
+	attachment := &models.ConfluenceAttachment{
+		Title:        "diagram.mmd",
+		DownloadLink: "/download/attachments/123/diagram.mmd",
+	}
+
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://example.atlassian.net/wiki/download/attachments/123/diagram.mmd" {
+			return nil, fmt.Errorf("unexpected url %s", r.URL.String())
+		}
+		if user, token, ok := r.BasicAuth(); !ok || user != "user" || token != "token" {
+			return nil, fmt.Errorf("unexpected auth %s %s", user, token)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("graph TD;")),
+		}, nil
+	})
+
+	client := NewClient("https://example.atlassian.net", "user", "token")
+	client.httpClient = &http.Client{Transport: transport}
+
+	data, err := client.DownloadAttachmentContent(attachment)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != "graph TD;" {
+		t.Fatalf("unexpected content: %s", string(data))
+	}
+}
+
+func TestNormalizeDownloadLink(t *testing.T) {
+	client := NewClient("https://example.atlassian.net", "user", "token")
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{
+			input: "https://other/download/file",
+			want:  "https://other/download/file",
+		},
+		{
+			input: "/wiki/download/attachments/123/file.txt",
+			want:  "https://example.atlassian.net/wiki/download/attachments/123/file.txt",
+		},
+		{
+			input: "/download/attachments/123/file.txt",
+			want:  "https://example.atlassian.net/wiki/download/attachments/123/file.txt",
+		},
+		{
+			input: "download/attachments/123/file with space.txt",
+			want:  "https://example.atlassian.net/wiki/download/attachments/123/file%20with%20space.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		got, err := client.normalizeDownloadLink(tt.input)
+		if err != nil {
+			t.Fatalf("normalizeDownloadLink(%q) unexpected error: %v", tt.input, err)
+		}
+		if got != tt.want {
+			t.Fatalf("normalizeDownloadLink(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }
 

@@ -324,7 +324,7 @@ func convertPageTree(client *confluence.Client, node *PageNode, outputDir string
 		}
 
 		// Use shared conversion pipeline with custom path
-		result := convertSinglePageWithPath(page, baseURL, outputPath, conversionOpts)
+		result := convertSinglePageWithPath(client, page, baseURL, outputPath, conversionOpts)
 
 		// Use shared result display
 		printConversionResult(result)

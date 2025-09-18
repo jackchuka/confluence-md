@@ -51,6 +51,7 @@ type ConfluenceAttachment struct {
 	MediaType    string `json:"mediaType"`
 	FileSize     int64  `json:"fileSize"`
 	DownloadLink string `json:"downloadLink"`
+	Version      int    `json:"version"`
 }
 
 // User represents a Confluence user

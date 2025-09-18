@@ -9,6 +9,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/jackchuka/confluence-md/internal/attachments"
 	"github.com/jackchuka/confluence-md/internal/models"
 )
 
@@ -16,23 +17,26 @@ import (
 type Converter struct {
 	mdConverter *converter.Converter
 	imageFolder string
+	plugin      *confluencePlugin
 }
 
 // NewConverter creates a new HTML to Markdown converter
-func NewConverter(imageFolder string) *Converter {
+func NewConverter(resolver attachments.Resolver, imageFolder string) *Converter {
+	plugin := NewConfluencePlugin(resolver, imageFolder)
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
 			commonmark.NewCommonmarkPlugin(),
 			// official table plugin doesn't handle complex cells well
 			// table.NewTablePlugin(),
-			NewConfluencePlugin(imageFolder),
+			plugin,
 		),
 	)
 
 	return &Converter{
 		mdConverter: conv,
 		imageFolder: imageFolder,
+		plugin:      plugin,
 	}
 }
 
@@ -52,6 +56,10 @@ func (c *Converter) ConvertHtml(html string) (string, error) {
 func (c *Converter) ConvertPage(page *models.ConfluencePage, baseURL string) (*models.MarkdownDocument, error) {
 	if err := page.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid page: %w", err)
+	}
+
+	if c.plugin != nil {
+		c.plugin.SetCurrentPage(page)
 	}
 
 	// Create markdown document
