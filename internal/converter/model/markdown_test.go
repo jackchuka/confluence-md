@@ -1,9 +1,11 @@
-package models
+package model
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
 )
 
 func TestMarkdownDocumentWithFrontmatter(t *testing.T) {
@@ -47,16 +49,16 @@ func TestMarkdownDocumentWithFrontmatter(t *testing.T) {
 }
 
 func TestNewMarkdownDocument(t *testing.T) {
-	page := &ConfluencePage{
+	page := &model.ConfluencePage{
 		ID:       "123",
 		Title:    "Sample Page",
 		SpaceKey: "SPACE",
 		Version:  2,
-		Content: ConfluenceContent{
-			Storage: ContentStorage{Value: "<p>content</p>"},
+		Content: model.ConfluenceContent{
+			Storage: model.ContentStorage{Value: "<p>content</p>"},
 		},
-		Metadata: ConfluenceMetadata{Labels: []Label{{Name: "label"}}},
-		CreatedBy: User{
+		Metadata: model.ConfluenceMetadata{Labels: []model.Label{{Name: "label"}}},
+		CreatedBy: model.User{
 			DisplayName: "Author",
 		},
 		UpdatedAt: time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC),

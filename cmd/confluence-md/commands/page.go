@@ -58,7 +58,7 @@ func runPage(_ *cobra.Command, args []string) error {
 	pageURL := args[0]
 
 	// Extract base URL from page URL
-	pageInfo, err := confluence.ParseURL(pageURL)
+	pageInfo, err := urlToPageInfo(pageURL)
 	if err != nil {
 		return fmt.Errorf("invalid Confluence URL: %w", err)
 	}
@@ -78,6 +78,7 @@ func runPage(_ *cobra.Command, args []string) error {
 
 	// Use shared conversion pipeline
 	result := convertSinglePage(
+		client,
 		page,
 		pageInfo.BaseURL,
 		pageOpts,

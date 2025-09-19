@@ -2,13 +2,14 @@ package commands
 
 import (
 	"fmt"
-	"os"
+	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/gosimple/slug"
+	"github.com/jackchuka/confluence-md/internal/confluence"
+	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter"
-	"github.com/jackchuka/confluence-md/internal/downloader"
-	"github.com/jackchuka/confluence-md/internal/models"
 )
 
 // sanitizeFileName uses the mature gosimple/slug library for robust filename sanitization
@@ -26,50 +27,6 @@ func sanitizeFileName(name string) string {
 	return sanitized
 }
 
-func downloadImages(doc *models.MarkdownDocument, email, apiToken string, outputDir string) error {
-	if len(doc.Images) == 0 {
-		return nil
-	}
-
-	imageDownloader := downloader.NewDownloader(email, apiToken)
-	if err := imageDownloader.DownloadImages(doc, outputDir); err != nil {
-		fmt.Printf("⚠️  Warning: Failed to download images: %v\n", err)
-		return err
-	}
-	return nil
-}
-
-// saveMarkdownDocumentWithOptions saves a markdown document with configurable frontmatter
-func saveMarkdownDocumentWithOptions(doc *models.MarkdownDocument, outputPath string, includeFrontmatter bool) error {
-	// Create directory if needed
-	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	// Write file
-	file, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	// Write frontmatter if title exists and enabled
-	if includeFrontmatter {
-		doc.Content, err = doc.WithFrontmatter()
-		if err != nil {
-			return fmt.Errorf("failed to convert document to markdown: %w", err)
-		}
-	}
-
-	// Write content
-	_, _ = file.WriteString(doc.Content)
-
-	return nil
-}
-
 // PageConversionResult represents the result of converting a single page
 type PageConversionResult struct {
 	OutputPath  string
@@ -81,51 +38,34 @@ type PageConversionResult struct {
 }
 
 // convertSinglePage handles the full conversion pipeline for a single page
-func convertSinglePage(page *models.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
-	return convertSinglePageWithPath(page, baseURL, "", opts)
+func convertSinglePage(client confluence.Client, page *confluenceModel.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
+	outputFileName := sanitizeFileName(page.Title) + ".md"
+	outputPath := filepath.Join(opts.OutputDir, outputFileName)
+	return convertSinglePageWithPath(client, page, baseURL, outputPath, opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
-func convertSinglePageWithPath(page *models.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
+func convertSinglePageWithPath(client confluence.Client, page *confluenceModel.ConfluencePage, baseURL, outputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
-		PageID: page.ID,
-		Title:  page.Title,
+		PageID:     page.ID,
+		Title:      page.Title,
+		OutputPath: outputPath,
 	}
 
 	// Create converter and convert page
-	conv := converter.NewConverter(opts.ImageFolder)
-	doc, err := conv.ConvertPage(page, baseURL)
+	var attachmentOption converter.Option
+	if opts.DownloadImages {
+		attachmentOption = converter.WithDownloadAttachments(opts.ImageFolder)
+	}
+	conv := converter.NewConverter(client, attachmentOption)
+	doc, err := conv.ConvertPage(page, baseURL, filepath.Dir(outputPath))
 	if err != nil {
 		result.Error = fmt.Errorf("failed to convert page: %w", err)
 		return result
 	}
+	result.ImagesCount = len(doc.Images)
 
-	// Generate output path
-	var outputPath string
-	if customOutputPath != "" {
-		outputPath = customOutputPath
-	} else {
-		outputFileName := sanitizeFileName(page.Title) + ".md"
-		outputPath = filepath.Join(opts.OutputDir, outputFileName)
-	}
-	result.OutputPath = outputPath
-
-	// Determine image directory (same directory as the markdown file for tree, outputDir for convert)
-	imageDir := opts.OutputDir
-	if customOutputPath != "" {
-		imageDir = filepath.Dir(outputPath)
-	}
-
-	// Download images
-	if opts.DownloadImages {
-		if err := downloadImages(doc, opts.Email, opts.APIKey, imageDir); err != nil {
-			result.Error = fmt.Errorf("failed to download images: %w", err)
-		}
-		result.ImagesCount = len(doc.Images)
-	}
-
-	// Save document
-	if err := saveMarkdownDocumentWithOptions(doc, outputPath, opts.IncludeMetadata); err != nil {
+	if err := converter.SaveMarkdownDocument(doc, outputPath, opts.IncludeMetadata); err != nil {
 		result.Error = fmt.Errorf("failed to save document: %w", err)
 		return result
 	}
@@ -150,4 +90,46 @@ func printConversionResult(result *PageConversionResult) {
 		}
 	}
 	fmt.Println()
+}
+
+func urlToPageInfo(pageURL string) (confluenceModel.PageURLInfo, error) {
+	if pageURL == "" {
+		return confluenceModel.PageURLInfo{}, fmt.Errorf("URL is empty")
+	}
+
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return confluenceModel.PageURLInfo{}, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	baseURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+	var pageID string
+	var spaceKey string
+	var title string
+
+	// Extract page ID from path
+	// Path format: /wiki/spaces/SPACE/pages/12345/Title
+	parts := strings.Split(u.Path, "/")
+	for i, part := range parts {
+		if part == "spaces" && i+1 < len(parts) {
+			spaceKey = parts[i+1]
+		}
+		if part == "pages" && i+1 < len(parts) {
+			pageID = parts[i+1]
+		}
+		if i == len(parts)-1 {
+			title = part
+		}
+	}
+
+	if pageID == "" {
+		return confluenceModel.PageURLInfo{}, fmt.Errorf("could not extract page ID from URL")
+	}
+
+	return confluenceModel.PageURLInfo{
+		BaseURL:  baseURL,
+		PageID:   pageID,
+		SpaceKey: spaceKey,
+		Title:    title,
+	}, nil
 }

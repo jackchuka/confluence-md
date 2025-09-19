@@ -1,33 +1,44 @@
-package converter
+package plugin
 
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
+	"github.com/jackchuka/confluence-md/internal/converter/plugin/attachments"
 	"golang.org/x/net/html"
 )
 
-type confluencePlugin struct {
-	imageFolder string
+type ConfluencePlugin struct {
+	imageFolder        string
+	attachmentResolver attachments.Resolver
+	currentPage        *model.ConfluencePage
 }
 
 // NewConfluencePlugin creates a new plugin for Confluence elements
-func NewConfluencePlugin(imageFolder string) converter.Plugin {
-	return &confluencePlugin{
-		imageFolder: imageFolder,
+func NewConfluencePlugin(resolver attachments.Resolver, imageFolder string) *ConfluencePlugin {
+	return &ConfluencePlugin{
+		imageFolder:        imageFolder,
+		attachmentResolver: resolver,
 	}
 }
 
+// SetCurrentPage records which page is currently being converted
+func (p *ConfluencePlugin) SetCurrentPage(page *model.ConfluencePage) {
+	p.currentPage = page
+}
+
 // Name returns the plugin name
-func (p *confluencePlugin) Name() string {
+func (p *ConfluencePlugin) Name() string {
 	return "confluence"
 }
 
 // Init initializes the plugin
-func (p *confluencePlugin) Init(conv *converter.Converter) error {
+func (p *ConfluencePlugin) Init(conv *converter.Converter) error {
 	// Register handlers for Confluence elements
 	conv.Register.RendererFor("ac:image", converter.TagTypeInline, p.handleImage, converter.PriorityStandard)
 	conv.Register.RendererFor("ac:emoticon", converter.TagTypeInline, p.handleEmoticon, converter.PriorityStandard)
@@ -40,7 +51,7 @@ func (p *confluencePlugin) Init(conv *converter.Converter) error {
 }
 
 // cellHasComplexContent checks if a single cell contains complex elements
-func (p *confluencePlugin) cellHasComplexContent(cell *html.Node) bool {
+func (p *ConfluencePlugin) cellHasComplexContent(cell *html.Node) bool {
 	blockElementCount := 0
 
 	for child := cell.FirstChild; child != nil; child = child.NextSibling {
@@ -70,7 +81,7 @@ func (p *confluencePlugin) cellHasComplexContent(cell *html.Node) bool {
 }
 
 // containsBrTags checks if a node contains any br tags
-func (p *confluencePlugin) containsBrTags(n *html.Node) bool {
+func (p *ConfluencePlugin) containsBrTags(n *html.Node) bool {
 	if n == nil {
 		return false
 	}
@@ -91,7 +102,7 @@ func (p *confluencePlugin) containsBrTags(n *html.Node) bool {
 }
 
 // getCellHTMLContent extracts the raw HTML content from a cell, preserving complex structures
-func (p *confluencePlugin) getCellHTMLContent(cell *html.Node) string {
+func (p *ConfluencePlugin) getCellHTMLContent(cell *html.Node) string {
 	var result strings.Builder
 
 	for child := cell.FirstChild; child != nil; child = child.NextSibling {
@@ -127,7 +138,7 @@ func (p *confluencePlugin) getCellHTMLContent(cell *html.Node) string {
 }
 
 // handleTable converts HTML tables to markdown tables, preserving HTML content for complex cells
-func (p *confluencePlugin) handleTable(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
 	// Extract table data
 	var rows [][]string
 	var isHeaderRow []bool
@@ -238,7 +249,7 @@ func (p *confluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 }
 
 // handleImage converts Confluence images to markdown
-func (p *confluencePlugin) handleImage(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+func (p *ConfluencePlugin) handleImage(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
 	// Extract filename from ri:filename attribute
 	filename := ""
 	for _, attr := range n.Attr {
@@ -251,7 +262,7 @@ func (p *confluencePlugin) handleImage(ctx converter.Context, w converter.Writer
 	if filename == "" {
 		var buf strings.Builder
 		_ = html.Render(&buf, n)
-		filename = parseConfluenceImage(buf.String())
+		filename = ParseConfluenceImage(buf.String())
 	}
 
 	if filename == "" {
@@ -267,7 +278,7 @@ func (p *confluencePlugin) handleImage(ctx converter.Context, w converter.Writer
 	return converter.RenderSuccess
 }
 
-func (p *confluencePlugin) handleEmoticon(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+func (p *ConfluencePlugin) handleEmoticon(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
 	for _, attr := range n.Attr {
 		if attr.Key == "ac:emoji-fallback" && attr.Val != "" {
 			_, _ = w.WriteString(attr.Val + " ")
@@ -293,7 +304,7 @@ func (p *confluencePlugin) handleEmoticon(ctx converter.Context, w converter.Wri
 	return converter.RenderTryNext
 }
 
-func (p *confluencePlugin) handleMacro(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+func (p *ConfluencePlugin) handleMacro(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
 	macroName := ""
 	for _, attr := range n.Attr {
 		if attr.Key == "ac:name" {
@@ -321,6 +332,8 @@ func (p *confluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		result = p.handleBlockquoteMacro(ctx, n, "💡", "Tip")
 	case "code":
 		result = p.handleCodeMacro(n)
+	case "mermaid-cloud":
+		result = p.handleMermaidMacro(n)
 	case "expand":
 		result = p.handleExpandMacro(ctx, n)
 	case "toc":
@@ -338,7 +351,7 @@ func (p *confluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 	return converter.RenderSuccess
 }
 
-func (p *confluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.Node, emoji, label string) string {
+func (p *ConfluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.Node, emoji, label string) string {
 	content := p.convertNestedHTML(ctx, n)
 	prefix := fmt.Sprintf("%s **%s:**", emoji, label)
 
@@ -363,7 +376,7 @@ func (p *confluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.
 }
 
 // handleCodeMacro converts code macros to code blocks
-func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
+func (p *ConfluencePlugin) handleCodeMacro(n *html.Node) string {
 	// Convert node to goquery selection for compatibility with existing logic
 	var buf strings.Builder
 	_ = html.Render(&buf, n)
@@ -375,28 +388,7 @@ func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
 	rawHTML, _ := selection.Html()
 	language := extractLanguageParameter(rawHTML)
 
-	// Extract code content using improved method
-	var code string
-	plainTextBody := selection.Find("ac\\:plain-text-body").First()
-	if plainTextBody.Length() > 0 {
-		// First try the <pre> tag approach for preprocessed CDATA
-		preTag := plainTextBody.Find("pre[data-cdata='true']").First()
-		if preTag.Length() > 0 {
-			code = preTag.Text()
-
-			// Unescape HTML entities from preprocessing
-			code = strings.ReplaceAll(code, "&lt;", "<")
-			code = strings.ReplaceAll(code, "&gt;", ">")
-			code = strings.ReplaceAll(code, "&amp;", "&")
-
-			code = strings.TrimSpace(code)
-		} else {
-			// Fallback to direct extraction using utility function
-			code = extractCodeContent(rawHTML)
-		}
-	}
-
-	// If still no code, try the utility function directly on the raw HTML
+	code := extractPlainTextBodyContent(selection, rawHTML)
 	if code == "" {
 		code = extractCodeContent(rawHTML)
 	}
@@ -407,7 +399,45 @@ func (p *confluencePlugin) handleCodeMacro(n *html.Node) string {
 	return fmt.Sprintf("```\n%s\n```\n", code)
 }
 
-func (p *confluencePlugin) handleTocMacro(n *html.Node) (string, bool) {
+func (p *ConfluencePlugin) handleMermaidMacro(n *html.Node) string {
+	var buf strings.Builder
+	_ = html.Render(&buf, n)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(buf.String()))
+	if err != nil {
+		return fmt.Sprintf("<!-- Error rendering macro: %s -->", err.Error())
+	}
+	selection := doc.Selection
+
+	filename := extractMacroParameter(selection, "filename")
+	revisionStr := extractMacroParameter(selection, "revision")
+	revision := 0
+	if revisionStr != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(revisionStr)); err == nil {
+			revision = parsed
+		}
+	}
+
+	if filename == "" {
+		return "<!-- Mermaid macro missing filename -->"
+	}
+	if p.attachmentResolver == nil {
+		return fmt.Sprintf("<!-- Mermaid attachment %s unavailable -->", filename)
+	}
+	if p.currentPage == nil {
+		return fmt.Sprintf("<!-- Mermaid attachment %s unavailable -->", filename)
+	}
+	diagram, err := p.attachmentResolver.Resolve(p.currentPage, filename, revision)
+	if err != nil {
+		return fmt.Sprintf("<!-- Failed to load mermaid %s: %v -->", filename, err)
+	}
+	diagram = strings.TrimSpace(diagram)
+	if diagram == "" {
+		return "<!-- Empty mermaid macro -->"
+	}
+	return fmt.Sprintf("```mermaid\n%s\n```\n", diagram)
+}
+
+func (p *ConfluencePlugin) handleTocMacro(n *html.Node) (string, bool) {
 	result := "<!-- Table of Contents -->"
 
 	// For TOC: check if it has parameter children or is self-closing
@@ -428,7 +458,7 @@ func (p *confluencePlugin) handleTocMacro(n *html.Node) (string, bool) {
 	return result, false
 }
 
-func (p *confluencePlugin) handleExpandMacro(ctx converter.Context, n *html.Node) string {
+func (p *ConfluencePlugin) handleExpandMacro(ctx converter.Context, n *html.Node) string {
 	// Extract content from rich-text-body using recursive conversion
 	content := p.convertNestedHTML(ctx, n)
 
@@ -441,7 +471,7 @@ func (p *confluencePlugin) handleExpandMacro(ctx converter.Context, n *html.Node
 }
 
 // convertNestedHTML recursively converts HTML content within macro nodes
-func (p *confluencePlugin) convertNestedHTML(ctx converter.Context, n *html.Node) string {
+func (p *ConfluencePlugin) convertNestedHTML(ctx converter.Context, n *html.Node) string {
 	// Find ac:rich-text-body node
 	richTextBody := p.findRichTextBodyNode(n)
 	if richTextBody == nil {
@@ -476,7 +506,7 @@ func (p *confluencePlugin) convertNestedHTML(ctx converter.Context, n *html.Node
 }
 
 // findRichTextBodyNode recursively finds ac:rich-text-body node
-func (p *confluencePlugin) findRichTextBodyNode(n *html.Node) *html.Node {
+func (p *ConfluencePlugin) findRichTextBodyNode(n *html.Node) *html.Node {
 	if n == nil {
 		return nil
 	}
@@ -494,4 +524,32 @@ func (p *confluencePlugin) findRichTextBodyNode(n *html.Node) *html.Node {
 	}
 
 	return nil
+}
+
+func extractPlainTextBodyContent(selection *goquery.Selection, rawHTML string) string {
+	plainTextBody := selection.Find("ac\\:plain-text-body").First()
+	if plainTextBody.Length() == 0 {
+		return extractCodeContent(rawHTML)
+	}
+
+	preTag := plainTextBody.Find("pre[data-cdata='true']").First()
+	if preTag.Length() > 0 {
+		content := preTag.Text()
+
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&amp;", "&")
+
+		return strings.TrimSpace(content)
+	}
+
+	return extractCodeContent(rawHTML)
+}
+
+func extractMacroParameter(selection *goquery.Selection, name string) string {
+	param := selection.Find(fmt.Sprintf("ac\\:parameter[ac\\:name='%s']", name)).First()
+	if param.Length() == 0 {
+		return ""
+	}
+	return strings.TrimSpace(param.Text())
 }

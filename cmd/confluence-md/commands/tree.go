@@ -71,7 +71,7 @@ func runTreeCommand(_ *cobra.Command, args []string) error {
 	}
 	pageURL := args[0]
 
-	pageInfo, err := confluence.ParseURL(pageURL)
+	pageInfo, err := urlToPageInfo(pageURL)
 	if err != nil {
 		return fmt.Errorf("invalid Confluence URL: %w", err)
 	}
@@ -105,7 +105,7 @@ func validateTreeOptions() error {
 	return nil
 }
 
-func performDryRun(client *confluence.Client, rootPageID string, opts *TreeOptions) error {
+func performDryRun(client confluence.Client, rootPageID string, opts *TreeOptions) error {
 	fmt.Println("\n📊 Page tree structure:")
 
 	// Fetch and display tree structure
@@ -127,7 +127,7 @@ func performDryRun(client *confluence.Client, rootPageID string, opts *TreeOptio
 	return nil
 }
 
-func performTreeConversion(client *confluence.Client, baseURL, rootPageID string, opts *TreeOptions) error {
+func performTreeConversion(client confluence.Client, baseURL, rootPageID string, opts *TreeOptions) error {
 	// Create output directory
 	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -184,11 +184,11 @@ type ConversionResults struct {
 	Errors  []error
 }
 
-func fetchPageTree(client *confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string) (*PageNode, error) {
+func fetchPageTree(client confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string) (*PageNode, error) {
 	return fetchPageTreeWithParent(client, pageID, maxDepth, currentDepth, excludePatterns, nil, []string{})
 }
 
-func fetchPageTreeWithParent(client *confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string, parent *PageNode, parentPath []string) (*PageNode, error) {
+func fetchPageTreeWithParent(client confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string, parent *PageNode, parentPath []string) (*PageNode, error) {
 	// Check depth limit
 	if maxDepth != -1 && currentDepth > maxDepth {
 		return nil, nil
@@ -300,7 +300,7 @@ func calculateTreeStats(node *PageNode) *TreeStats {
 	return stats
 }
 
-func convertPageTree(client *confluence.Client, node *PageNode, outputDir string, baseURL string, opts *TreeOptions, results *ConversionResults) error {
+func convertPageTree(client confluence.Client, node *PageNode, outputDir string, baseURL string, opts *TreeOptions, results *ConversionResults) error {
 	if node == nil {
 		return nil
 	}
@@ -313,28 +313,29 @@ func convertPageTree(client *confluence.Client, node *PageNode, outputDir string
 		fmt.Printf("  ❌ Failed to fetch: %v\n", err)
 		results.Failed++
 		results.Errors = append(results.Errors, err)
+
+		return nil
+	}
+	// Generate hierarchical output path
+	outputPath := getOutputPath(node, outputDir)
+
+	// Create options for tree conversion (inherit from tree options)
+	conversionOpts := PageOptions{
+		authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
+		commonOptions: opts.commonOptions,
+	}
+
+	// Use shared conversion pipeline with custom path
+	result := convertSinglePageWithPath(client, page, baseURL, outputPath, conversionOpts)
+
+	// Use shared result display
+	printConversionResult(result)
+
+	if result.Success {
+		results.Success++
 	} else {
-		// Generate hierarchical output path
-		outputPath := getOutputPath(node, outputDir)
-
-		// Create options for tree conversion (inherit from tree options)
-		conversionOpts := PageOptions{
-			authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
-			commonOptions: opts.commonOptions,
-		}
-
-		// Use shared conversion pipeline with custom path
-		result := convertSinglePageWithPath(page, baseURL, outputPath, conversionOpts)
-
-		// Use shared result display
-		printConversionResult(result)
-
-		if result.Success {
-			results.Success++
-		} else {
-			results.Failed++
-			results.Errors = append(results.Errors, result.Error)
-		}
+		results.Failed++
+		results.Errors = append(results.Errors, result.Error)
 	}
 
 	// Convert children

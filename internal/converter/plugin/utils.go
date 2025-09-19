@@ -1,4 +1,4 @@
-package converter
+package plugin
 
 import (
 	"html"
@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// parseConfluenceImage extracts filename from Confluence ac:image elements
-func parseConfluenceImage(html string) string {
+// ParseConfluenceImage extracts filename from Confluence ac:image elements
+func ParseConfluenceImage(html string) string {
 	filenameRegex := regexp.MustCompile(`ri:filename="([^"]+)"`)
 	matches := filenameRegex.FindStringSubmatch(html)
 	if len(matches) > 1 {

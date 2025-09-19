@@ -1,4 +1,4 @@
-package converter
+package plugin
 
 import (
 	"strings"
@@ -7,10 +7,13 @@ import (
 	htmldom "golang.org/x/net/html"
 
 	convpkg "github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/jackchuka/confluence-md/internal/confluence/model"
+	mock_attachments "github.com/jackchuka/confluence-md/internal/converter/plugin/attachments/mock"
+	gomock "go.uber.org/mock/gomock"
 )
 
 func TestCellHasComplexContent(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 
 	tests := []struct {
 		name string
@@ -51,7 +54,7 @@ func TestCellHasComplexContent(t *testing.T) {
 }
 
 func TestContainsBrTags(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<p>Line<br/>Break</p>`, "p")
 	if !plugin.containsBrTags(node) {
 		t.Fatalf("expected br detection")
@@ -62,7 +65,7 @@ func TestContainsBrTags(t *testing.T) {
 }
 
 func TestGetCellHTMLContent(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	cell := findNode(t, `<table><tbody><tr><td><p>Text</p><a href="/link">Link</a></td></tr></tbody></table>`, "td")
 	got := plugin.getCellHTMLContent(cell)
 	if !strings.Contains(got, "<p>Text</p>") || !strings.Contains(got, "<a href=\"/link\">Link</a>") {
@@ -71,7 +74,7 @@ func TestGetCellHTMLContent(t *testing.T) {
 }
 
 func TestHandleImage(t *testing.T) {
-	plugin := &confluencePlugin{imageFolder: "images"}
+	plugin := &ConfluencePlugin{imageFolder: "images"}
 	node := findNode(t, `<ac:image ri:filename="diagram.png"></ac:image>`, "ac:image")
 	var out strings.Builder
 	status := plugin.handleImage(nil, &out, node)
@@ -84,7 +87,7 @@ func TestHandleImage(t *testing.T) {
 }
 
 func TestHandleEmoticon(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:emoticon ac:emoji-fallback="😊"></ac:emoticon>`, "ac:emoticon")
 	var out strings.Builder
 	status := plugin.handleEmoticon(nil, &out, node)
@@ -97,7 +100,7 @@ func TestHandleEmoticon(t *testing.T) {
 }
 
 func TestHandleTocMacro(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:structured-macro ac:name="toc" />`, "ac:structured-macro")
 	result, tryNext := plugin.handleTocMacro(node)
 	if result != "<!-- Table of Contents -->" || !tryNext {
@@ -115,12 +118,37 @@ func TestHandleTocMacro(t *testing.T) {
 }
 
 func TestHandleCodeMacro(t *testing.T) {
-	plugin := &confluencePlugin{}
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">go</ac:parameter><ac:plain-text-body><!--[CDATA[fmt.Println(&quot;ok&quot;)]]></ac:plain-text-body></ac:structured-macro>`, "ac:structured-macro")
 	result := plugin.handleCodeMacro(node)
 	expected := "```go\nfmt.Println(\"ok\")\n```\n"
 	if result != expected {
 		t.Fatalf("unexpected code block: %q", result)
+	}
+}
+
+func TestHandleMermaidCloudMacro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	page := &model.ConfluencePage{ID: "123"}
+	mockResolver.EXPECT().Resolve(page, "diagram", 2).Return("graph TD;\nA-->B;", nil)
+	plugin := &ConfluencePlugin{attachmentResolver: mockResolver}
+	plugin.SetCurrentPage(page)
+	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter><ac:parameter ac:name="revision">2</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
+	result := plugin.handleMermaidMacro(node)
+	expected := "```mermaid\ngraph TD;\nA-->B;\n```\n"
+	if result != expected {
+		t.Fatalf("unexpected mermaid cloud block: %q", result)
+	}
+}
+
+func TestHandleMermaidCloudMacroMissingResolver(t *testing.T) {
+	plugin := &ConfluencePlugin{}
+	plugin.SetCurrentPage(&model.ConfluencePage{ID: "123"})
+	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
+	result := plugin.handleMermaidMacro(node)
+	if !strings.Contains(result, "Mermaid attachment diagram unavailable") {
+		t.Fatalf("expected unavailable message, got %q", result)
 	}
 }
 
