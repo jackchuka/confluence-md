@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/jackchuka/confluence-md/internal/confluence"
+	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
+	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/spf13/cobra"
 )
 
@@ -14,6 +16,8 @@ import (
 type TreeOptions struct {
 	authOptions
 	commonOptions
+
+	OutputNamer converter.OutputNamer
 
 	// Processing options
 	MaxDepth int      // -1 for unlimited, default: 3
@@ -80,6 +84,12 @@ func runTreeCommand(_ *cobra.Command, args []string) error {
 	if err := validateTreeOptions(); err != nil {
 		return fmt.Errorf("invalid options: %w", err)
 	}
+
+	namer, err := buildOutputNamer(treeOpts.OutputNameTemplate)
+	if err != nil {
+		return fmt.Errorf("invalid output name template: %w", err)
+	}
+	treeOpts.OutputNamer = namer
 
 	client := confluence.NewClient(pageInfo.BaseURL, treeOpts.Email, treeOpts.APIKey)
 
@@ -317,12 +327,19 @@ func convertPageTree(client confluence.Client, node *PageNode, outputDir string,
 		return nil
 	}
 	// Generate hierarchical output path
-	outputPath := getOutputPath(node, outputDir)
+	outputPath, err := getOutputPath(node, page, outputDir, opts.OutputNamer)
+	if err != nil {
+		fmt.Printf("  ❌ Failed to resolve output path: %v\n", err)
+		results.Failed++
+		results.Errors = append(results.Errors, err)
+		return nil
+	}
 
 	// Create options for tree conversion (inherit from tree options)
 	conversionOpts := PageOptions{
 		authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
 		commonOptions: opts.commonOptions,
+		OutputNamer:   opts.OutputNamer,
 	}
 
 	// Use shared conversion pipeline with custom path
@@ -348,23 +365,23 @@ func convertPageTree(client confluence.Client, node *PageNode, outputDir string,
 	return nil
 }
 
-func getOutputPath(node *PageNode, baseDir string) string {
-	sanitizedTitle := sanitizeFileName(node.Title)
-	fileName := sanitizedTitle + ".md"
-
-	// Tree structure - create nested directories based on full path
+func getOutputPath(node *PageNode, page *confluenceModel.ConfluencePage, baseDir string, namer converter.OutputNamer) (string, error) {
 	path := baseDir
 
-	// Build directory structure from the hierarchical path (excluding current page)
 	if len(node.Path) > 1 {
-		// Use all path elements except the last one (which is the current page)
 		dirPath := node.Path[:len(node.Path)-1]
 		for _, pathElement := range dirPath {
 			path = filepath.Join(path, sanitizeFileName(pathElement))
 		}
-		// Create the directory structure
-		_ = os.MkdirAll(path, 0755)
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return "", fmt.Errorf("failed to create output directory: %w", err)
+		}
 	}
 
-	return filepath.Join(path, fileName)
+	fileName, err := converter.GenerateFileName(page, namer)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(path, fileName), nil
 }

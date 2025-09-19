@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/jackchuka/confluence-md/internal/confluence"
+	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/spf13/cobra"
 )
 
@@ -37,6 +38,8 @@ var pageOpts PageOptions
 type PageOptions struct {
 	authOptions
 	commonOptions
+
+	OutputNamer converter.OutputNamer
 }
 
 func init() {
@@ -62,6 +65,12 @@ func runPage(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid Confluence URL: %w", err)
 	}
+
+	namer, err := buildOutputNamer(pageOpts.OutputNameTemplate)
+	if err != nil {
+		return fmt.Errorf("invalid output name template: %w", err)
+	}
+	pageOpts.OutputNamer = namer
 
 	// Create Confluence client
 	client := confluence.NewClient(pageInfo.BaseURL, pageOpts.Email, pageOpts.APIKey)
