@@ -27,6 +27,19 @@ func sanitizeFileName(name string) string {
 	return sanitized
 }
 
+func buildOutputNamer(template string) (converter.OutputNamer, error) {
+	if strings.TrimSpace(template) == "" {
+		return nil, nil
+	}
+
+	namer, err := converter.NewTemplateOutputNamer(template)
+	if err != nil {
+		return nil, err
+	}
+
+	return namer, nil
+}
+
 // PageConversionResult represents the result of converting a single page
 type PageConversionResult struct {
 	OutputPath  string
@@ -39,25 +52,32 @@ type PageConversionResult struct {
 
 // convertSinglePage handles the full conversion pipeline for a single page
 func convertSinglePage(client confluence.Client, page *confluenceModel.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
-	outputFileName := sanitizeFileName(page.Title) + ".md"
-	outputPath := filepath.Join(opts.OutputDir, outputFileName)
-	return convertSinglePageWithPath(client, page, baseURL, outputPath, opts)
+	return convertSinglePageWithPath(client, page, baseURL, "", opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
 func convertSinglePageWithPath(client confluence.Client, page *confluenceModel.ConfluencePage, baseURL, outputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
-		PageID:     page.ID,
-		Title:      page.Title,
-		OutputPath: outputPath,
+		PageID: page.ID,
+		Title:  page.Title,
 	}
 
-	// Create converter and convert page
-	var attachmentOption converter.Option
-	if opts.DownloadImages {
-		attachmentOption = converter.WithDownloadAttachments(opts.ImageFolder)
+	if outputPath == "" {
+		fileName, err := converter.GenerateFileName(page, opts.OutputNamer)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to generate output filename: %w", err)
+			return result
+		}
+		outputPath = filepath.Join(opts.OutputDir, fileName)
 	}
-	conv := converter.NewConverter(client, attachmentOption)
+	result.OutputPath = outputPath
+
+	// Create converter and convert page
+	var options []converter.Option
+	if opts.DownloadImages {
+		options = append(options, converter.WithDownloadAttachments(opts.ImageFolder))
+	}
+	conv := converter.NewConverter(client, options...)
 	doc, err := conv.ConvertPage(page, baseURL, filepath.Dir(outputPath))
 	if err != nil {
 		result.Error = fmt.Errorf("failed to convert page: %w", err)

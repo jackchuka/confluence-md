@@ -63,6 +63,7 @@ confluence-md tree <page-url> --email your-email@example.com --api-token your-ap
 - `--email, -e`: Your Confluence email address (**required**)
 - `--api-token, -t`: Your Confluence API token (**required**)
 - `--output, -o`: Output directory (default: current directory)
+- `--output-name-template`: Go template for the markdown filename (see below)
 - `--download-images`: Download images from Confluence (default: true)
 - `--image-folder`: Folder to save images (default: `assets`)
 - `--include-metadata`: Include page metadata in the Markdown front matter (default: true)
@@ -73,12 +74,35 @@ confluence-md tree <page-url> --email your-email@example.com --api-token your-ap
 # Convert to a specific directory
 confluence-md page <page-url> --email user@example.com --api-token token --output ./docs
 
+# Prefix filenames with the last updated date (YYYY-MM-DD-title.md)
+confluence-md page <page-url> \
+  --email user@example.com \
+  --api-token token \
+  --output-name-template "{{ .Page.UpdatedAt.Format \"2006-01-02\" }}-{{ .SlugTitle }}"
+
 # Convert without downloading images
 confluence-md page <page-url> --email user@example.com --api-token token --download-images=false
 
 # Convert entire page tree
 confluence-md tree <page-url> --email user@example.com --api-token token --output ./wiki
 ```
+
+### Output name templates
+
+The `--output-name-template` flag accepts a Go text/template string. Templates can reference:
+
+- `{{ .Page }}` – the full Confluence page object (e.g. `{{ .Page.UpdatedAt.Format "2006-01-02" }}`)
+  - `{{ .Page.Title }}` – the original page title
+  - `{{ .Page.ID }}` – the Confluence page ID
+  - `{{ .Page.SpaceKey }}` – the Confluence space key
+  - see ConfluencePage struct for more fields
+- `{{ .SlugTitle }}` – the default slugified title (e.g. `sample-page`)
+
+Additionally, you can use the following helper functions:
+
+- `{{ slug <string> }}` – slugifies a string (e.g. `Sample Page` → `sample-page`)
+
+If the rendered filename omits an extension, `.md` is appended automatically.
 
 ## Supported Confluence Elements
 
