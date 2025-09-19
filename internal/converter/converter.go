@@ -8,7 +8,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
-	"github.com/jackchuka/confluence-md/internal/confluence/client"
+	"github.com/jackchuka/confluence-md/internal/confluence"
 	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter/model"
 	"github.com/jackchuka/confluence-md/internal/converter/plugin"
@@ -36,7 +36,7 @@ func WithDownloadAttachments(imageFolder string) Option {
 }
 
 // NewConverter creates a new HTML to Markdown converter
-func NewConverter(client *client.Client, opts ...Option) *Converter {
+func NewConverter(client confluence.Client, opts ...Option) *Converter {
 	c := &Converter{}
 
 	for _, opt := range opts {

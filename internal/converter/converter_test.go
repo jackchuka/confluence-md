@@ -9,6 +9,8 @@ import (
 
 	confModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	convModel "github.com/jackchuka/confluence-md/internal/converter/model"
+	mock_attachments "github.com/jackchuka/confluence-md/internal/converter/plugin/attachments/mock"
+	gomock "go.uber.org/mock/gomock"
 )
 
 func TestConverterConvertPage(t *testing.T) {
@@ -79,16 +81,15 @@ func TestConverterConvertPage(t *testing.T) {
 func TestConverterDownloadImages(t *testing.T) {
 	data := []byte("image-bytes")
 	attachment := &confModel.ConfluenceAttachment{Title: "diagram.png", MediaType: "image/png", FileSize: int64(len(data))}
-	stub := &stubAttachmentDownloader{
-		t:                t,
-		expectedFilename: "diagram.png",
-		attachment:       attachment,
-		data:             data,
-	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "diagram.png", 0).Return(attachment, data, nil)
 
 	conv := &Converter{
 		imageFolder: "images",
-		attachments: stub,
+		attachments: mockResolver,
 	}
 
 	doc := &convModel.MarkdownDocument{
@@ -120,6 +121,59 @@ func TestConverterDownloadImages(t *testing.T) {
 	}
 	if doc.Images[0].Size != int64(len(data)) {
 		t.Fatalf("expected size %d, got %d", len(data), doc.Images[0].Size)
+	}
+}
+
+func TestSaveMarkdownDocument(t *testing.T) {
+	tmpDir := t.TempDir()
+	doc := &convModel.MarkdownDocument{
+		Content: "body",
+		Frontmatter: convModel.Frontmatter{
+			Title:  "Title",
+			Author: "Author",
+			Date:   time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+			Confluence: convModel.ConfluenceRef{
+				PageID:   "123",
+				SpaceKey: "SPACE",
+				Version:  1,
+				URL:      "https://example.atlassian.net/wiki/pages/123",
+			},
+		},
+	}
+
+	plainPath := filepath.Join(tmpDir, "doc.md")
+	if err := SaveMarkdownDocument(doc, plainPath, false); err != nil {
+		t.Fatalf("SaveMarkdownDocument returned error: %v", err)
+	}
+
+	plainContent, err := os.ReadFile(plainPath)
+	if err != nil {
+		t.Fatalf("failed to read markdown file: %v", err)
+	}
+	if string(plainContent) != "body" {
+		t.Fatalf("unexpected markdown content: %q", string(plainContent))
+	}
+
+	// Reset content and save with frontmatter
+	doc.Content = "body"
+	frontPath := filepath.Join(tmpDir, "doc-with-frontmatter.md")
+	if err := SaveMarkdownDocument(doc, frontPath, true); err != nil {
+		t.Fatalf("SaveMarkdownDocument with frontmatter returned error: %v", err)
+	}
+
+	frontContent, err := os.ReadFile(frontPath)
+	if err != nil {
+		t.Fatalf("failed to read frontmatter file: %v", err)
+	}
+	frontStr := string(frontContent)
+	if !strings.HasPrefix(frontStr, "---\n") {
+		t.Fatalf("expected frontmatter prefix, got %q", frontStr)
+	}
+	if !strings.Contains(frontStr, "title: \"Title\"") {
+		t.Fatalf("expected title in frontmatter, got %q", frontStr)
+	}
+	if doc.Content != frontStr {
+		t.Fatalf("expected document content updated with frontmatter")
 	}
 }
 
@@ -187,24 +241,4 @@ func TestFixNestedListSpacing(t *testing.T) {
 	if got := fixNestedListSpacing(input); got != want {
 		t.Fatalf("fixNestedListSpacing(%q) = %q, want %q", input, got, want)
 	}
-}
-
-type stubAttachmentDownloader struct {
-	t                *testing.T
-	expectedFilename string
-	attachment       *confModel.ConfluenceAttachment
-	data             []byte
-	err              error
-}
-
-func (s *stubAttachmentDownloader) Resolve(*confModel.ConfluencePage, string, int) (string, error) {
-	return "", nil
-}
-
-func (s *stubAttachmentDownloader) DownloadAttachment(_ *confModel.ConfluencePage, filename string, _ int) (*confModel.ConfluenceAttachment, []byte, error) {
-	if filename != s.expectedFilename {
-		s.t.Fatalf("expected filename %q, got %q", s.expectedFilename, filename)
-	}
-
-	return s.attachment, s.data, s.err
 }

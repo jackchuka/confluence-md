@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +8,8 @@ import (
 
 	convpkg "github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/jackchuka/confluence-md/internal/confluence/model"
+	mock_attachments "github.com/jackchuka/confluence-md/internal/converter/plugin/attachments/mock"
+	gomock "go.uber.org/mock/gomock"
 )
 
 func TestCellHasComplexContent(t *testing.T) {
@@ -127,10 +128,12 @@ func TestHandleCodeMacro(t *testing.T) {
 }
 
 func TestHandleMermaidCloudMacro(t *testing.T) {
-	plugin := &ConfluencePlugin{
-		attachmentResolver: &stubResolver{expectedPageID: "123", expectedFilename: "diagram", expectedRevision: 2, content: "graph TD;\nA-->B;"},
-	}
-	plugin.SetCurrentPage(&model.ConfluencePage{ID: "123"})
+	ctrl := gomock.NewController(t)
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	page := &model.ConfluencePage{ID: "123"}
+	mockResolver.EXPECT().Resolve(page, "diagram", 2).Return("graph TD;\nA-->B;", nil)
+	plugin := &ConfluencePlugin{attachmentResolver: mockResolver}
+	plugin.SetCurrentPage(page)
 	node := findNode(t, `<ac:structured-macro ac:name="mermaid-cloud"><ac:parameter ac:name="filename">diagram</ac:parameter><ac:parameter ac:name="revision">2</ac:parameter></ac:structured-macro>`, "ac:structured-macro")
 	result := plugin.handleMermaidMacro(node)
 	expected := "```mermaid\ngraph TD;\nA-->B;\n```\n"
@@ -147,36 +150,6 @@ func TestHandleMermaidCloudMacroMissingResolver(t *testing.T) {
 	if !strings.Contains(result, "Mermaid attachment diagram unavailable") {
 		t.Fatalf("expected unavailable message, got %q", result)
 	}
-}
-
-type stubResolver struct {
-	expectedPageID   string
-	expectedFilename string
-	expectedRevision int
-	content          string
-}
-
-func (s *stubResolver) Resolve(page *model.ConfluencePage, filename string, revision int) (string, error) {
-	if page == nil || page.ID != s.expectedPageID {
-		return "", fmt.Errorf("unexpected page %v", page)
-	}
-	if filename != s.expectedFilename || revision != s.expectedRevision {
-		return "", fmt.Errorf("unexpected inputs %s %d", filename, revision)
-	}
-	return s.content, nil
-}
-
-func (s *stubResolver) DownloadAttachment(page *model.ConfluencePage, filename string, revision int) (*model.ConfluenceAttachment, []byte, error) {
-	if page == nil || page.ID != s.expectedPageID {
-		return nil, nil, fmt.Errorf("unexpected page %v", page)
-	}
-	if filename != s.expectedFilename || revision != s.expectedRevision {
-		return nil, nil, fmt.Errorf("unexpected inputs %s %d", filename, revision)
-	}
-	attachment := &model.ConfluenceAttachment{
-		ID: "att-1",
-	}
-	return attachment, []byte(s.content), nil
 }
 
 func findNode(t *testing.T, markup, tag string) *htmldom.Node {

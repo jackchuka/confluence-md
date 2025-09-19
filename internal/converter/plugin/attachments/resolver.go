@@ -1,10 +1,11 @@
+//go:generate go tool go.uber.org/mock/mockgen -source=$GOFILE -package=mock_$GOPACKAGE -destination=./mock/mock_$GOFILE
 package attachments
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/jackchuka/confluence-md/internal/confluence/client"
+	"github.com/jackchuka/confluence-md/internal/confluence"
 	"github.com/jackchuka/confluence-md/internal/confluence/model"
 )
 
@@ -16,24 +17,16 @@ type Resolver interface {
 
 // Service implements Resolver using a Confluence content downloader.
 type Service struct {
-	client *client.Client
+	client confluence.Client
 }
 
 // NewService constructs a new attachment service.
-func NewService(client *client.Client) *Service {
+func NewService(client confluence.Client) *Service {
 	return &Service{client: client}
 }
 
 // Resolve locates the best matching attachment on the given page and returns its content.
 func (s *Service) Resolve(page *model.ConfluencePage, filename string, revision int) (string, error) {
-	if s == nil {
-		return "", fmt.Errorf("attachment downloader is not configured")
-	}
-
-	if s.client == nil {
-		return "", fmt.Errorf("attachment downloader client is not configured")
-	}
-
 	if page == nil {
 		return "", fmt.Errorf("page context not provided")
 	}
@@ -53,14 +46,6 @@ func (s *Service) Resolve(page *model.ConfluencePage, filename string, revision 
 
 // DownloadAttachment retrieves attachment bytes for the given filename and optional revision.
 func (s *Service) DownloadAttachment(page *model.ConfluencePage, filename string, revision int) (*model.ConfluenceAttachment, []byte, error) {
-	if s == nil {
-		return nil, nil, fmt.Errorf("attachment downloader is not configured")
-	}
-
-	if s.client == nil {
-		return nil, nil, fmt.Errorf("attachment downloader client is not configured")
-	}
-
 	if page == nil {
 		return nil, nil, fmt.Errorf("page context not provided")
 	}

@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/jackchuka/confluence-md/internal/confluence"
-	"github.com/jackchuka/confluence-md/internal/confluence/client"
 	"github.com/spf13/cobra"
 )
 
@@ -59,13 +58,13 @@ func runPage(_ *cobra.Command, args []string) error {
 	pageURL := args[0]
 
 	// Extract base URL from page URL
-	pageInfo, err := confluence.ParseURL(pageURL)
+	pageInfo, err := urlToPageInfo(pageURL)
 	if err != nil {
 		return fmt.Errorf("invalid Confluence URL: %w", err)
 	}
 
 	// Create Confluence client
-	client := client.New(pageInfo.BaseURL, pageOpts.Email, pageOpts.APIKey)
+	client := confluence.NewClient(pageInfo.BaseURL, pageOpts.Email, pageOpts.APIKey)
 
 	page, err := client.GetPage(pageInfo.PageID)
 	if err != nil {
