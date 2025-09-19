@@ -2,9 +2,8 @@ package converter
 
 import (
 	"fmt"
-	"net/url"
-	"regexp"
-	"strings"
+	"os"
+	"path/filepath"
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
@@ -16,36 +15,61 @@ import (
 	"github.com/jackchuka/confluence-md/internal/converter/plugin/attachments"
 )
 
+const maxImageSizeBytes = 10 * 1024 * 1024
+
 // Converter handles HTML to Markdown conversion
 type Converter struct {
 	mdConverter *converter.Converter
-	imageFolder string
 	plugin      *plugin.ConfluencePlugin
+	attachments attachments.Resolver
+
+	// options
+	imageFolder string
+}
+
+type Option func(*Converter)
+
+func WithDownloadAttachments(imageFolder string) Option {
+	return func(c *Converter) {
+		c.imageFolder = imageFolder
+	}
 }
 
 // NewConverter creates a new HTML to Markdown converter
-func NewConverter(client *client.Client, imageFolder string) *Converter {
+func NewConverter(client *client.Client, opts ...Option) *Converter {
+	c := &Converter{}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+
 	resolver := attachments.NewService(client)
-	plugin := plugin.NewConfluencePlugin(resolver, imageFolder)
+	if c.imageFolder != "" {
+		c.attachments = resolver
+	}
+	c.plugin = plugin.NewConfluencePlugin(resolver, c.imageFolder)
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
 			commonmark.NewCommonmarkPlugin(),
 			// official table plugin doesn't handle complex cells well
 			// table.NewTablePlugin(),
-			plugin,
+			c.plugin,
 		),
 	)
+	c.mdConverter = conv
 
-	return &Converter{
-		mdConverter: conv,
-		imageFolder: imageFolder,
-		plugin:      plugin,
-	}
+	return c
 }
 
 // ConvertPage converts a Confluence page to Markdown
-func (c *Converter) ConvertPage(page *confluenceModel.ConfluencePage, baseURL string) (*model.MarkdownDocument, error) {
+func (c *Converter) ConvertPage(
+	page *confluenceModel.ConfluencePage,
+	baseURL string,
+	outputDir string,
+) (*model.MarkdownDocument, error) {
 	if err := page.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid page: %w", err)
 	}
@@ -68,109 +92,53 @@ func (c *Converter) ConvertPage(page *confluenceModel.ConfluencePage, baseURL st
 	imageRefs := c.extractImageReferences(htmlContent, doc.Frontmatter.Confluence.PageID, baseURL)
 	doc.Images = imageRefs
 
+	if c.attachments != nil {
+		if err := c.downloadImages(doc, page, outputDir); err != nil {
+			return nil, fmt.Errorf("failed to download images: %w", err)
+		}
+	}
+
 	return doc, nil
 }
 
-// convertHtml converts HTML string to Markdown (for testing)
-func (c *Converter) convertHtml(html string) (string, error) {
-	// Preprocess CDATA content before HTML parsing strips it
-	processedHTML := c.preprocessCDATA(html)
-
-	md, err := c.mdConverter.ConvertString(processedHTML)
-	if err != nil {
-		fmt.Printf("Conversion error: %v\n", err)
-	}
-	return c.postprocessMarkdown(md), nil
-}
-
-// postprocessMarkdown cleans up the converted Markdown
-func (c *Converter) postprocessMarkdown(markdown string) string {
-	// Remove excessive whitespace
-	markdown = regexp.MustCompile(`\n{3,}`).ReplaceAllString(markdown, "\n\n")
-
-	// Fix nested list spacing - html-to-markdown still adds extra blank lines for nested lists
-	markdown = fixNestedListSpacing(markdown)
-
-	// Fix link formatting
-	markdown = fixMarkdownLinks(markdown)
-
-	// Trim whitespace
-	markdown = strings.TrimSpace(markdown)
-
-	return markdown
-}
-
-// extractImageReferences finds all images in the HTML and creates ImageRef objects
-func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model.ImageRef {
-	var imageRefs []model.ImageRef
-
-	// Find all Confluence ac:image elements
-	acImageRegex := regexp.MustCompile(`<ac:image[^>]*>[\s\S]*?</ac:image>`)
-	matches := acImageRegex.FindAllString(html, -1)
-
-	for _, imageHTML := range matches {
-		fileName := plugin.ParseConfluenceImage(imageHTML)
-
-		if fileName == "" {
-			continue
-		}
-
-		// Build Confluence attachment download URL
-		// Format: {baseURL}/wiki/download/attachments/{pageId}/{encodedFilename}
-		encodedFilename := url.QueryEscape(fileName)
-		actualURL := fmt.Sprintf("%s/wiki/download/attachments/%s/%s",
-			strings.TrimSuffix(baseURL, "/"), pageID, encodedFilename)
-
-		localPath := c.imageFolder + "/" + fileName
-
-		imageRef := model.ImageRef{
-			OriginalURL: actualURL,
-			LocalPath:   localPath,
-			FileName:    fileName,
-		}
-
-		imageRefs = append(imageRefs, imageRef)
+// downloadImages fetches referenced images via the attachment service and writes them to disk.
+func (c *Converter) downloadImages(doc *model.MarkdownDocument, page *confluenceModel.ConfluencePage, outputDir string) error {
+	if doc == nil {
+		return fmt.Errorf("document cannot be nil")
 	}
 
-	return imageRefs
-}
-
-// fixMarkdownLinks improves link formatting
-func fixMarkdownLinks(markdown string) string {
-	// Fix Confluence internal links
-	confLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(/wiki/spaces/([^/]+)/pages/(\d+)/[^)]+\)`)
-	markdown = confLinkRegex.ReplaceAllString(markdown, "[$1](confluence://pageId/$3)")
-
-	return markdown
-}
-
-// fixNestedListSpacing removes extra blank lines in nested lists recursively
-func fixNestedListSpacing(markdown string) string {
-	listMarker := `(?:[-*+]\s|\d+\.\s)`
-	pattern := regexp.MustCompile(`(\n\s*` + listMarker + `[^\n]*)\n\s*\n(\s{2,}` + listMarker + `)`)
-	result := pattern.ReplaceAllString(markdown, "$1\n$2")
-	// Recursively fix until no more changes
-	if result != markdown {
-		return fixNestedListSpacing(result)
+	if len(doc.Images) == 0 {
+		return nil
 	}
-	return result
-}
 
-// preprocessCDATA converts CDATA sections to preserve content through HTML parsing
-func (c *Converter) preprocessCDATA(html string) string {
-	// Replace CDATA sections with properly wrapped content
-	cdataRegex := regexp.MustCompile(`<!\[CDATA\[([\s\S]*?)\]\]>`)
-	return cdataRegex.ReplaceAllStringFunc(html, func(match string) string {
-		// Extract content between CDATA markers
-		if submatch := cdataRegex.FindStringSubmatch(match); len(submatch) > 1 {
-			// Preserve whitespace by wrapping in <pre> and escape HTML special characters
-			content := submatch[1]
-			content = strings.ReplaceAll(content, "&", "&amp;")
-			content = strings.ReplaceAll(content, "<", "&lt;")
-			content = strings.ReplaceAll(content, ">", "&gt;")
-			// Wrap in <pre> tag to preserve whitespace and indicate this is preformatted content
-			return fmt.Sprintf("<pre data-cdata='true'>%s</pre>", content)
+	if page == nil {
+		return fmt.Errorf("page context is required to download images")
+	}
+
+	for i := range doc.Images {
+		imageRef := &doc.Images[i]
+		attachment, data, err := c.attachments.DownloadAttachment(page, imageRef.FileName, 0)
+		if err != nil {
+			return fmt.Errorf("failed to download image %s: %w", imageRef.FileName, err)
 		}
-		return match
-	})
+
+		if attachment.FileSize > maxImageSizeBytes {
+			return fmt.Errorf("image %s too large: %d bytes (max %d)", imageRef.FileName, attachment.FileSize, maxImageSizeBytes)
+		}
+
+		imageRef.ContentType = attachment.MediaType
+		imageRef.Size = attachment.FileSize
+
+		filePath := filepath.Join(outputDir, c.imageFolder, imageRef.FileName)
+		fmt.Println("Downloading image:", imageRef.FileName, "to", filePath)
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return fmt.Errorf("failed to create image directory: %w", err)
+		}
+
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write image %s: %w", imageRef.FileName, err)
+		}
+	}
+
+	return nil
 }

@@ -166,6 +166,19 @@ func (s *stubResolver) Resolve(page *model.ConfluencePage, filename string, revi
 	return s.content, nil
 }
 
+func (s *stubResolver) DownloadAttachment(page *model.ConfluencePage, filename string, revision int) (*model.ConfluenceAttachment, []byte, error) {
+	if page == nil || page.ID != s.expectedPageID {
+		return nil, nil, fmt.Errorf("unexpected page %v", page)
+	}
+	if filename != s.expectedFilename || revision != s.expectedRevision {
+		return nil, nil, fmt.Errorf("unexpected inputs %s %d", filename, revision)
+	}
+	attachment := &model.ConfluenceAttachment{
+		ID: "att-1",
+	}
+	return attachment, []byte(s.content), nil
+}
+
 func findNode(t *testing.T, markup, tag string) *htmldom.Node {
 	t.Helper()
 	node, err := htmldom.Parse(strings.NewReader(markup))

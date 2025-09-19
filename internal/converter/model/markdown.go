@@ -36,7 +36,6 @@ type ConfluenceRef struct {
 // ImageRef represents a reference to a downloaded image
 type ImageRef struct {
 	OriginalURL string `json:"originalUrl"`
-	LocalPath   string `json:"localPath"`
 	FileName    string `json:"fileName"`
 	ContentType string `json:"contentType"`
 	Size        int64  `json:"size"`

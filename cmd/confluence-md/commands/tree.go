@@ -314,28 +314,29 @@ func convertPageTree(client *client.Client, node *PageNode, outputDir string, ba
 		fmt.Printf("  ❌ Failed to fetch: %v\n", err)
 		results.Failed++
 		results.Errors = append(results.Errors, err)
+
+		return nil
+	}
+	// Generate hierarchical output path
+	outputPath := getOutputPath(node, outputDir)
+
+	// Create options for tree conversion (inherit from tree options)
+	conversionOpts := PageOptions{
+		authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
+		commonOptions: opts.commonOptions,
+	}
+
+	// Use shared conversion pipeline with custom path
+	result := convertSinglePageWithPath(client, page, baseURL, outputPath, conversionOpts)
+
+	// Use shared result display
+	printConversionResult(result)
+
+	if result.Success {
+		results.Success++
 	} else {
-		// Generate hierarchical output path
-		outputPath := getOutputPath(node, outputDir)
-
-		// Create options for tree conversion (inherit from tree options)
-		conversionOpts := PageOptions{
-			authOptions:   authOptions{Email: opts.Email, APIKey: opts.APIKey},
-			commonOptions: opts.commonOptions,
-		}
-
-		// Use shared conversion pipeline with custom path
-		result := convertSinglePageWithPath(client, page, baseURL, outputPath, conversionOpts)
-
-		// Use shared result display
-		printConversionResult(result)
-
-		if result.Success {
-			results.Success++
-		} else {
-			results.Failed++
-			results.Errors = append(results.Errors, result.Error)
-		}
+		results.Failed++
+		results.Errors = append(results.Errors, result.Error)
 	}
 
 	// Convert children

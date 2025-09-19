@@ -1,39 +1,42 @@
 package converter
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackchuka/confluence-md/internal/confluence/model"
+	confModel "github.com/jackchuka/confluence-md/internal/confluence/model"
+	convModel "github.com/jackchuka/confluence-md/internal/converter/model"
 )
 
 func TestConverterConvertPage(t *testing.T) {
-	conv := NewConverter(nil, "images")
+	conv := NewConverter(nil)
 
-	page := &model.ConfluencePage{
+	page := &confModel.ConfluencePage{
 		ID:       "123",
 		Title:    "Sample Page",
 		SpaceKey: "SPACE",
 		Version:  1,
-		Content: model.ConfluenceContent{
-			Storage: model.ContentStorage{
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
 				Value: "<p>Hello World</p><ac:image ri:filename=\"diagram.png\"></ac:image>",
 			},
 		},
-		Metadata: model.ConfluenceMetadata{
-			Labels: []model.Label{{Name: "Label"}},
+		Metadata: confModel.ConfluenceMetadata{
+			Labels: []confModel.Label{{Name: "Label"}},
 		},
-		CreatedBy: model.User{DisplayName: "Author"},
+		CreatedBy: confModel.User{DisplayName: "Author"},
 		UpdatedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 	}
 	page.Content.Storage.Representation = "storage"
 	page.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	page.UpdatedBy = model.User{DisplayName: "Editor"}
+	page.UpdatedBy = confModel.User{DisplayName: "Editor"}
 
 	tests := []struct {
 		name    string
-		page    *model.ConfluencePage
+		page    *confModel.ConfluencePage
 		wantErr string
 	}{
 		{
@@ -42,14 +45,14 @@ func TestConverterConvertPage(t *testing.T) {
 		},
 		{
 			name:    "invalid page",
-			page:    &model.ConfluencePage{Title: "Missing ID", Content: model.ConfluenceContent{Storage: model.ContentStorage{Value: "<p>content</p>"}}, SpaceKey: "SPACE"},
+			page:    &confModel.ConfluencePage{Title: "Missing ID", Content: confModel.ConfluenceContent{Storage: confModel.ContentStorage{Value: "<p>content</p>"}}, SpaceKey: "SPACE"},
 			wantErr: "page ID cannot be empty",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doc, err := conv.ConvertPage(tt.page, "https://example.atlassian.net")
+			doc, err := conv.ConvertPage(tt.page, "https://example.atlassian.net", ".")
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
@@ -69,26 +72,59 @@ func TestConverterConvertPage(t *testing.T) {
 			if !strings.Contains(doc.Content, "Hello World") {
 				t.Fatalf("expected markdown content, got %q", doc.Content)
 			}
-			if len(doc.Images) != 1 {
-				t.Fatalf("expected one image reference, got %d", len(doc.Images))
-			}
-			img := doc.Images[0]
-			if img.FileName != "diagram.png" {
-				t.Fatalf("unexpected image name %q", img.FileName)
-			}
-			wantURL := "https://example.atlassian.net/wiki/download/attachments/123/diagram.png"
-			if img.OriginalURL != wantURL {
-				t.Fatalf("unexpected original URL %q want %q", img.OriginalURL, wantURL)
-			}
-			if img.LocalPath != "images/diagram.png" {
-				t.Fatalf("unexpected local path %q", img.LocalPath)
-			}
 		})
 	}
 }
 
+func TestConverterDownloadImages(t *testing.T) {
+	data := []byte("image-bytes")
+	attachment := &confModel.ConfluenceAttachment{Title: "diagram.png", MediaType: "image/png", FileSize: int64(len(data))}
+	stub := &stubAttachmentDownloader{
+		t:                t,
+		expectedFilename: "diagram.png",
+		attachment:       attachment,
+		data:             data,
+	}
+
+	conv := &Converter{
+		imageFolder: "images",
+		attachments: stub,
+	}
+
+	doc := &convModel.MarkdownDocument{
+		Images: []convModel.ImageRef{{
+			FileName: "diagram.png",
+		}},
+	}
+
+	page := &confModel.ConfluencePage{
+		Attachments: []confModel.ConfluenceAttachment{{Title: "diagram.png"}},
+	}
+
+	tmpDir := t.TempDir()
+
+	if err := conv.downloadImages(doc, page, tmpDir); err != nil {
+		t.Fatalf("DownloadImages returned error: %v", err)
+	}
+
+	imagePath := filepath.Join(tmpDir, "images", "diagram.png")
+	got, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("failed to read downloaded image: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Fatalf("unexpected image content: %q", string(got))
+	}
+	if doc.Images[0].ContentType != "image/png" {
+		t.Fatalf("expected content type image/png, got %q", doc.Images[0].ContentType)
+	}
+	if doc.Images[0].Size != int64(len(data)) {
+		t.Fatalf("expected size %d, got %d", len(data), doc.Images[0].Size)
+	}
+}
+
 func TestConverterPostprocessMarkdown(t *testing.T) {
-	conv := NewConverter(nil, "images")
+	conv := NewConverter(nil)
 
 	tests := []struct {
 		name  string
@@ -123,7 +159,7 @@ func TestConverterPostprocessMarkdown(t *testing.T) {
 }
 
 func TestConverterPreprocessCDATA(t *testing.T) {
-	conv := NewConverter(nil, "images")
+	conv := NewConverter(nil, nil)
 	input := "<![CDATA[<tag>&value]]>"
 	got := conv.preprocessCDATA(input)
 	if !strings.Contains(got, "<pre data-cdata='true'>") {
@@ -134,26 +170,6 @@ func TestConverterPreprocessCDATA(t *testing.T) {
 	}
 	if !strings.Contains(got, "&lt;tag&gt;") {
 		t.Fatalf("expected html escaped content, got %q", got)
-	}
-}
-
-func TestExtractorImageReferences(t *testing.T) {
-	conv := NewConverter(nil, "assets")
-	html := `<ac:image ri:filename="one.png"></ac:image><ac:image>missing</ac:image><ac:image ri:filename="two space.png"></ac:image>`
-
-	images := conv.extractImageReferences(html, "123", "https://example.atlassian.net")
-	if len(images) != 2 {
-		t.Fatalf("expected 2 images, got %d", len(images))
-	}
-
-	if images[0].OriginalURL != "https://example.atlassian.net/wiki/download/attachments/123/one.png" {
-		t.Fatalf("unexpected original url: %q", images[0].OriginalURL)
-	}
-	if images[1].OriginalURL != "https://example.atlassian.net/wiki/download/attachments/123/two+space.png" {
-		t.Fatalf("unexpected encoded url: %q", images[1].OriginalURL)
-	}
-	if images[1].LocalPath != "assets/two space.png" {
-		t.Fatalf("unexpected local path: %q", images[1].LocalPath)
 	}
 }
 
@@ -171,4 +187,24 @@ func TestFixNestedListSpacing(t *testing.T) {
 	if got := fixNestedListSpacing(input); got != want {
 		t.Fatalf("fixNestedListSpacing(%q) = %q, want %q", input, got, want)
 	}
+}
+
+type stubAttachmentDownloader struct {
+	t                *testing.T
+	expectedFilename string
+	attachment       *confModel.ConfluenceAttachment
+	data             []byte
+	err              error
+}
+
+func (s *stubAttachmentDownloader) Resolve(*confModel.ConfluencePage, string, int) (string, error) {
+	return "", nil
+}
+
+func (s *stubAttachmentDownloader) DownloadAttachment(_ *confModel.ConfluencePage, filename string, _ int) (*confModel.ConfluenceAttachment, []byte, error) {
+	if filename != s.expectedFilename {
+		s.t.Fatalf("expected filename %q, got %q", s.expectedFilename, filename)
+	}
+
+	return s.attachment, s.data, s.err
 }

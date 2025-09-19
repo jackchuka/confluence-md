@@ -10,7 +10,6 @@ import (
 	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/jackchuka/confluence-md/internal/converter/model"
-	"github.com/jackchuka/confluence-md/internal/downloader"
 )
 
 // sanitizeFileName uses the mature gosimple/slug library for robust filename sanitization
@@ -26,19 +25,6 @@ func sanitizeFileName(name string) string {
 	}
 
 	return sanitized
-}
-
-func downloadImages(doc *model.MarkdownDocument, email, apiToken string, outputDir string) error {
-	if len(doc.Images) == 0 {
-		return nil
-	}
-
-	imageDownloader := downloader.NewDownloader(email, apiToken)
-	if err := imageDownloader.DownloadImages(doc, outputDir); err != nil {
-		fmt.Printf("⚠️  Warning: Failed to download images: %v\n", err)
-		return err
-	}
-	return nil
 }
 
 // saveMarkdownDocumentWithOptions saves a markdown document with configurable frontmatter
@@ -84,47 +70,31 @@ type PageConversionResult struct {
 
 // convertSinglePage handles the full conversion pipeline for a single page
 func convertSinglePage(client *client.Client, page *confluenceModel.ConfluencePage, baseURL string, opts PageOptions) *PageConversionResult {
-	return convertSinglePageWithPath(client, page, baseURL, "", opts)
+	outputFileName := sanitizeFileName(page.Title) + ".md"
+	outputPath := filepath.Join(opts.OutputDir, outputFileName)
+	return convertSinglePageWithPath(client, page, baseURL, outputPath, opts)
 }
 
 // convertSinglePageWithPath handles conversion with a custom output path (for tree structure)
-func convertSinglePageWithPath(client *client.Client, page *confluenceModel.ConfluencePage, baseURL, customOutputPath string, opts PageOptions) *PageConversionResult {
+func convertSinglePageWithPath(client *client.Client, page *confluenceModel.ConfluencePage, baseURL, outputPath string, opts PageOptions) *PageConversionResult {
 	result := &PageConversionResult{
-		PageID: page.ID,
-		Title:  page.Title,
+		PageID:     page.ID,
+		Title:      page.Title,
+		OutputPath: outputPath,
 	}
 
 	// Create converter and convert page
-	conv := converter.NewConverter(client, opts.ImageFolder)
-	doc, err := conv.ConvertPage(page, baseURL)
+	var attachmentOption converter.Option
+	if opts.DownloadImages {
+		attachmentOption = converter.WithDownloadAttachments(opts.ImageFolder)
+	}
+	conv := converter.NewConverter(client, attachmentOption)
+	doc, err := conv.ConvertPage(page, baseURL, filepath.Dir(outputPath))
 	if err != nil {
 		result.Error = fmt.Errorf("failed to convert page: %w", err)
 		return result
 	}
-
-	// Generate output path
-	var outputPath string
-	if customOutputPath != "" {
-		outputPath = customOutputPath
-	} else {
-		outputFileName := sanitizeFileName(page.Title) + ".md"
-		outputPath = filepath.Join(opts.OutputDir, outputFileName)
-	}
-	result.OutputPath = outputPath
-
-	// Determine image directory (same directory as the markdown file for tree, outputDir for convert)
-	imageDir := opts.OutputDir
-	if customOutputPath != "" {
-		imageDir = filepath.Dir(outputPath)
-	}
-
-	// Download images
-	if opts.DownloadImages {
-		if err := downloadImages(doc, opts.Email, opts.APIKey, imageDir); err != nil {
-			result.Error = fmt.Errorf("failed to download images: %w", err)
-		}
-		result.ImagesCount = len(doc.Images)
-	}
+	result.ImagesCount = len(doc.Images)
 
 	// Save document
 	if err := saveMarkdownDocumentWithOptions(doc, outputPath, opts.IncludeMetadata); err != nil {
