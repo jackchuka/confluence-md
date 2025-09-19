@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/jackchuka/confluence-md)](https://goreportcard.com/report/github.com/jackchuka/confluence-md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A CLI tool to convert Confluence pages to Markdown format with support for images and page trees.
+A CLI tool to convert Confluence pages to Markdown format with a single command. Supports images, tables, lists, and various macros (**yes, even mermaid diagrams!**).
 
 ## Features
 
@@ -58,12 +58,14 @@ Convert an entire page hierarchy:
 confluence-md tree <page-url> --email your-email@example.com --api-token your-api-token
 ```
 
-### Options
+### Common Options
 
+- `--email, -e`: Your Confluence email address (**required**)
+- `--api-token, -t`: Your Confluence API token (**required**)
 - `--output, -o`: Output directory (default: current directory)
 - `--download-images`: Download images from Confluence (default: true)
-- `--email`: Your Confluence email address (required)
-- `--api-token`: Your Confluence API token (required)
+- `--image-folder`: Folder to save images (default: `assets`)
+- `--include-metadata`: Include page metadata in the Markdown front matter (default: true)
 
 ### Examples
 
@@ -91,17 +93,18 @@ confluence-md tree <page-url> --email user@example.com --api-token token --outpu
 
 ### Macros (`ac:structured-macro`)
 
-| Macro            | Status                 | Conversion                                                          |
-| ---------------- | ---------------------- | ------------------------------------------------------------------- |
-| **`info`**       | ✅ Fully Supported     | Converted to blockquote with ℹ️ Info prefix                         |
-| **`warning`**    | ✅ Fully Supported     | Converted to blockquote with ⚠️ Warning prefix                      |
-| **`note`**       | ✅ Fully Supported     | Converted to blockquote with 📝 Note prefix                         |
-| **`tip`**        | ✅ Fully Supported     | Converted to blockquote with 💡 Tip prefix                          |
-| **`code`**       | ✅ Fully Supported     | Converted to markdown code blocks with language syntax highlighting |
-| **`expand`**     | ✅ Fully Supported     | Content extracted and rendered directly                             |
-| **`toc`**        | ✅ Fully Supported     | Converted to `<!-- Table of Contents -->` comment                   |
-| **`children`**   | ✅ Fully Supported     | Converted to `<!-- Child Pages -->` comment                         |
-| **Other macros** | ⚠️ Partially Supported | Converted to `<!-- Unsupported macro: {name} -->` comments          |
+| Macro               | Status                      | Conversion                                                          |
+| ------------------- | --------------------------- | ------------------------------------------------------------------- |
+| **`info`**          | ✅ Fully Supported          | Converted to blockquote with ℹ️ Info prefix                         |
+| **`warning`**       | ✅ Fully Supported          | Converted to blockquote with ⚠️ Warning prefix                      |
+| **`note`**          | ✅ Fully Supported          | Converted to blockquote with 📝 Note prefix                         |
+| **`tip`**           | ✅ Fully Supported          | Converted to blockquote with 💡 Tip prefix                          |
+| **`code`**          | ✅ Fully Supported          | Converted to markdown code blocks with language syntax highlighting |
+| **`mermaid-cloud`** | ✅ Fully Supported          | Converted to mermaid code blocks                                    |
+| **`expand`**        | ✅ Fully Supported          | Content extracted and rendered directly                             |
+| **`toc`**           | ⚠️ Partially Supported      | Converted to `<!-- Table of Contents -->` comment                   |
+| **`children`**      | ⚠️ Partially Supported      | Converted to `<!-- Child Pages -->` comment                         |
+| **Other macros**    | Plan to support per request | Converted to `<!-- Unsupported macro: {name} -->` comments          |
 
 ## Output Structure
 
