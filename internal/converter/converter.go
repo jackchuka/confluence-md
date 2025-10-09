@@ -51,8 +51,12 @@ func NewConverter(client confluence.Client, opts ...Option) *Converter {
 		if c.imageFolder != "" {
 			c.attachments = resolver
 		}
+		// Use the client-aware plugin constructor for user resolution
+		c.plugin = plugin.NewConfluencePluginWithClient(client, resolver, c.imageFolder)
+	} else {
+		// Use the basic plugin constructor when no client available
+		c.plugin = plugin.NewConfluencePlugin(resolver, c.imageFolder)
 	}
-	c.plugin = plugin.NewConfluencePlugin(resolver, c.imageFolder)
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),

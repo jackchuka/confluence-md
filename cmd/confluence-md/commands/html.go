@@ -35,15 +35,13 @@ Examples:
 }
 
 var htmlOptions struct {
-	output       string
-	imageFolder  string
-	includeLinks bool
+	output      string
+	imageFolder string
 }
 
 func init() {
 	htmlCmd.Flags().StringVarP(&htmlOptions.output, "output", "o", "", "Output file (default: stdout)")
 	htmlCmd.Flags().StringVar(&htmlOptions.imageFolder, "image-folder", "assets", "Folder path for images in markdown")
-	htmlCmd.Flags().BoolVar(&htmlOptions.includeLinks, "preserve-links", true, "Preserve links in output")
 
 	rootCmd.AddCommand(htmlCmd)
 }
@@ -91,14 +89,12 @@ func runHTMLConvert(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Write to file
 		if err := os.WriteFile(htmlOptions.output, []byte(markdown), 0644); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 
 		fmt.Fprintf(os.Stderr, "✅ Converted successfully to: %s\n", htmlOptions.output)
 	} else {
-		// Write to stdout
 		fmt.Print(markdown)
 	}
 

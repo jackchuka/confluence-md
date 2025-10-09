@@ -124,16 +124,16 @@ If the rendered filename omits an extension, `.md` is appended automatically.
 
 ### Basic Elements
 
-| Element             | Confluence Tag             | Conversion                                                  |
-| ------------------- | -------------------------- | ----------------------------------------------------------- |
-| **Images**          | `ac:image`                 | Downloaded and converted to local markdown image references |
-| **Emoticons**       | `ac:emoticon`              | Converted to emoji fallback or shortnames                   |
-| **Tables**          | Standard HTML tables       | Full table support with proper markdown formatting          |
-| **Lists**           | Standard HTML lists        | Nested lists with proper indentation                        |
-| **User Links**      | `ac:link` + `ri:user`      | Converted to `@user(account-id)` format                     |
-| **Time Elements**   | `<time>`                   | Datetime attribute extracted and displayed                  |
-| **Inline Comments** | `ac:inline-comment-marker` | Text preserved with comment reference                       |
-| **Placeholders**    | `ac:placeholder`           | Converted to HTML comments                                  |
+| Element             | Confluence Tag             | Conversion                                                              |
+| ------------------- | -------------------------- | ----------------------------------------------------------------------- |
+| **Images**          | `ac:image`                 | Downloaded and converted to local markdown image references             |
+| **Emoticons**       | `ac:emoticon`              | Converted to emoji fallback or shortnames                               |
+| **Tables**          | Standard HTML tables       | Full table support with proper markdown formatting                      |
+| **Lists**           | Standard HTML lists        | Nested lists with proper indentation                                    |
+| **User Links**      | `ac:link` + `ri:user`      | Converted to `@DisplayName` (or `@user(account-id)` if name not cached) |
+| **Time Elements**   | `<time>`                   | Datetime attribute extracted and displayed                              |
+| **Inline Comments** | `ac:inline-comment-marker` | Text preserved with comment reference                                   |
+| **Placeholders**    | `ac:placeholder`           | Converted to HTML comments                                              |
 
 ### Macros (`ac:structured-macro`)
 
@@ -151,6 +151,12 @@ If the rendered filename omits an extension, `.md` is appended automatically.
 | **`toc`**           | ⚠️ Partially Supported      | Converted to `<!-- Table of Contents -->` comment                   |
 | **`children`**      | ⚠️ Partially Supported      | Converted to `<!-- Child Pages -->` comment                         |
 | **Other macros**    | Plan to support per request | Converted to `<!-- Unsupported macro: {name} -->` comments          |
+
+### User Name Resolution
+
+User references (`@user`) are automatically resolved to display names when converting pages via the `page` or `tree` commands
+
+**Note:** When using the `html` command (without Confluence API access), user names cannot be resolved and will always display as `@user(account-id)`.
 
 ## Output Structure
 

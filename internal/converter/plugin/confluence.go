@@ -2,12 +2,14 @@ package plugin
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/jackchuka/confluence-md/internal/confluence"
 	"github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter/plugin/attachments"
 	"golang.org/x/net/html"
@@ -16,7 +18,9 @@ import (
 type ConfluencePlugin struct {
 	imageFolder        string
 	attachmentResolver attachments.Resolver
+	client             confluence.Client
 	currentPage        *model.ConfluencePage
+	userCache          map[string]string // accountID -> displayName
 }
 
 // NewConfluencePlugin creates a new plugin for Confluence elements
@@ -24,12 +28,98 @@ func NewConfluencePlugin(resolver attachments.Resolver, imageFolder string) *Con
 	return &ConfluencePlugin{
 		imageFolder:        imageFolder,
 		attachmentResolver: resolver,
+		userCache:          make(map[string]string),
+	}
+}
+
+// NewConfluencePluginWithClient creates a plugin with API client access for user resolution
+func NewConfluencePluginWithClient(client confluence.Client, resolver attachments.Resolver, imageFolder string) *ConfluencePlugin {
+	return &ConfluencePlugin{
+		imageFolder:        imageFolder,
+		attachmentResolver: resolver,
+		client:             client,
+		userCache:          make(map[string]string),
 	}
 }
 
 // SetCurrentPage records which page is currently being converted
 func (p *ConfluencePlugin) SetCurrentPage(page *model.ConfluencePage) {
 	p.currentPage = page
+
+	// Populate user cache from page metadata
+	if page != nil {
+		if page.CreatedBy.AccountID != "" && page.CreatedBy.DisplayName != "" {
+			p.userCache[page.CreatedBy.AccountID] = page.CreatedBy.DisplayName
+		}
+		if page.UpdatedBy.AccountID != "" && page.UpdatedBy.DisplayName != "" {
+			p.userCache[page.UpdatedBy.AccountID] = page.UpdatedBy.DisplayName
+		}
+
+		// Extract and cache all user mentions from page content
+		p.extractAndCacheUsers(page)
+	}
+}
+
+// extractAndCacheUsers finds all user references in the page HTML and adds them to cache
+func (p *ConfluencePlugin) extractAndCacheUsers(page *model.ConfluencePage) {
+	html := page.Content.Storage.Value
+	accountIDs := ExtractUserAccountIDs(html)
+
+	if p.client != nil && len(accountIDs) > 0 {
+		for _, accountID := range accountIDs {
+			if _, ok := p.userCache[accountID]; ok {
+				continue
+			}
+
+			user, err := p.client.GetUser(accountID)
+			if err != nil {
+				continue
+			}
+
+			if user.DisplayName != "" {
+				p.userCache[accountID] = user.DisplayName
+			} else if user.PublicName != "" {
+				p.userCache[accountID] = user.PublicName
+			}
+		}
+	}
+	log.Printf("Cached users: %+v", p.userCache)
+}
+
+// ExtractUserAccountIDs finds all user account IDs in the HTML
+func ExtractUserAccountIDs(html string) []string {
+	accountIDs := make(map[string]bool)
+
+	// Find all ri:account-id attributes
+	start := 0
+	for {
+		idx := strings.Index(html[start:], `ri:account-id="`)
+		if idx == -1 {
+			break
+		}
+		idx += start + len(`ri:account-id="`)
+
+		// Find the closing quote
+		endIdx := strings.Index(html[idx:], `"`)
+		if endIdx == -1 {
+			break
+		}
+
+		accountID := html[idx : idx+endIdx]
+		if accountID != "" {
+			accountIDs[accountID] = true
+		}
+
+		start = idx + endIdx + 1
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(accountIDs))
+	for id := range accountIDs {
+		result = append(result, id)
+	}
+
+	return result
 }
 
 // Name returns the plugin name
@@ -685,8 +775,13 @@ func (p *ConfluencePlugin) handleLink(ctx converter.Context, w converter.Writer,
 			}
 
 			if accountID != "" {
-				_, _ = fmt.Fprintf(w, "@user(%s)", accountID)
-				return converter.RenderSuccess
+				if displayName, ok := p.userCache[accountID]; ok {
+					_, _ = fmt.Fprintf(w, " @%s ", displayName)
+				} else {
+					// Fallback to account ID
+					_, _ = fmt.Fprintf(w, " @user(%s) ", accountID)
+				}
+				return converter.RenderTryNext
 			}
 		}
 	}
@@ -749,8 +844,8 @@ func (p *ConfluencePlugin) handleTime(ctx converter.Context, w converter.Writer,
 	}
 
 	if datetime != "" {
-		_, _ = w.WriteString(datetime)
-		return converter.RenderSuccess
+		_, _ = w.WriteString(datetime + " ")
+		return converter.RenderTryNext
 	}
 
 	// If no datetime attribute, try to get text content

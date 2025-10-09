@@ -83,6 +83,16 @@ type ConfluenceErrorResponse struct {
 	Reason     string `json:"reason"`
 }
 
+// ConfluenceUser represents a Confluence user from the API
+type ConfluenceUser struct {
+	Type        string `json:"type"`
+	AccountID   string `json:"accountId"`
+	AccountType string `json:"accountType"`
+	Email       string `json:"email"`
+	PublicName  string `json:"publicName"`
+	DisplayName string `json:"displayName"`
+}
+
 // ConvertAPIPageToModel converts the API response to our domain model
 func ConvertAPIPageToModel(apiPage *ConfluenceAPIPage) *ConfluencePage {
 	// Convert labels
