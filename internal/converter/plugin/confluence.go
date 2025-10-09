@@ -151,7 +151,7 @@ func (p *ConfluencePlugin) cellHasComplexContent(cell *html.Node) bool {
 	for child := cell.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type == html.ElementNode {
 			switch child.Data {
-			case "ul", "ol", "div", "blockquote", "pre", "table":
+			case "ul", "ol", "div", "blockquote", "pre", "table", "ac:task-list":
 				// These elements are always considered complex
 				return true
 			case "p", "h1", "h2", "h3", "h4", "h5", "h6":
@@ -237,6 +237,15 @@ func (p *ConfluencePlugin) flattenCellContent(ctx converter.Context, w *strings.
 						w.WriteString(" ")
 					}
 				}
+			case "ul":
+				// Handle unordered lists
+				p.flattenListContent(ctx, w, child, false)
+			case "ol":
+				// Handle ordered lists
+				p.flattenListContent(ctx, w, child, true)
+			case "ac:task-list":
+				// Handle Confluence task lists
+				p.flattenTaskList(ctx, w, child)
 			case "strong", "b", "em", "i", "code", "a":
 				// Preserve these inline elements
 				var buf strings.Builder
@@ -246,10 +255,12 @@ func (p *ConfluencePlugin) flattenCellContent(ctx converter.Context, w *strings.
 				p.handleMacro(ctx, w, child)
 			case "ac:emoticon":
 				p.handleEmoticon(ctx, w, child)
+				p.flattenCellContent(ctx, w, child)
 			case "ac:link":
 				p.handleLink(ctx, w, child)
 			case "time":
 				p.handleTime(ctx, w, child)
+				p.flattenCellContent(ctx, w, child)
 			case "ac:inline-comment-marker":
 				p.flattenCellContent(ctx, w, child)
 			case "ac:placeholder":
@@ -259,6 +270,106 @@ func (p *ConfluencePlugin) flattenCellContent(ctx converter.Context, w *strings.
 				p.flattenCellContent(ctx, w, child)
 			}
 		}
+	}
+}
+
+// flattenListContent handles list elements within table cells
+func (p *ConfluencePlugin) flattenListContent(ctx converter.Context, w *strings.Builder, listNode *html.Node, ordered bool) {
+	p.flattenListContentWithDepth(ctx, w, listNode, ordered, 0)
+}
+
+// flattenListContentWithDepth handles list elements with indentation depth tracking
+func (p *ConfluencePlugin) flattenListContentWithDepth(ctx converter.Context, w *strings.Builder, listNode *html.Node, ordered bool, depth int) {
+	w.WriteString("<br>")
+	index := 1
+	for li := listNode.FirstChild; li != nil; li = li.NextSibling {
+		if li.Type != html.ElementNode || li.Data != "li" {
+			continue
+		}
+
+		// Add indentation
+		indent := strings.Repeat("&nbsp;&nbsp;", depth)
+		w.WriteString(indent)
+
+		// Add list marker
+		if ordered {
+			fmt.Fprintf(w, "%d. ", index)
+			index++
+		} else {
+			w.WriteString("• ")
+		}
+
+		// Process list item content, but handle nested lists specially
+		p.flattenListItemContent(ctx, w, li, depth)
+		w.WriteString("<br>")
+	}
+}
+
+// flattenListItemContent processes list item children, handling nested lists with increased depth
+func (p *ConfluencePlugin) flattenListItemContent(ctx converter.Context, w *strings.Builder, li *html.Node, depth int) {
+	for child := li.FirstChild; child != nil; child = child.NextSibling {
+		switch child.Type {
+		case html.TextNode:
+			text := child.Data
+			if text != "" {
+				w.WriteString(text)
+			}
+		case html.ElementNode:
+			switch child.Data {
+			case "ul":
+				// Handle nested unordered lists with increased depth
+				p.flattenListContentWithDepth(ctx, w, child, false, depth+1)
+			case "ol":
+				// Handle nested ordered lists with increased depth
+				p.flattenListContentWithDepth(ctx, w, child, true, depth+1)
+			case "p":
+				// Process paragraph content within list item
+				if child.FirstChild != nil {
+					p.flattenCellContent(ctx, w, child)
+				}
+			default:
+				// For other elements, use standard flattening
+				p.flattenCellContent(ctx, w, child)
+			}
+		}
+	}
+}
+
+// flattenTaskList handles Confluence task lists within table cells
+func (p *ConfluencePlugin) flattenTaskList(ctx converter.Context, w *strings.Builder, taskListNode *html.Node) {
+	w.WriteString("<br>")
+	for task := taskListNode.FirstChild; task != nil; task = task.NextSibling {
+		if task.Type != html.ElementNode || task.Data != "ac:task" {
+			continue
+		}
+
+		// Extract task status and body
+		status := "incomplete"
+		var body string
+
+		for child := task.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode {
+				continue
+			}
+
+			if child.Data == "ac:task-status" && child.FirstChild != nil {
+				status = child.FirstChild.Data
+			} else if child.Data == "ac:task-body" {
+				var buf strings.Builder
+				p.flattenCellContent(ctx, &buf, child)
+				body = buf.String()
+			}
+		}
+
+		// Write checkbox based on status
+		if status == "complete" {
+			w.WriteString("☑ ")
+		} else {
+			w.WriteString("☐ ")
+		}
+
+		w.WriteString(body)
+		w.WriteString("<br>")
 	}
 }
 
@@ -845,9 +956,8 @@ func (p *ConfluencePlugin) handleTime(ctx converter.Context, w converter.Writer,
 
 	if datetime != "" {
 		_, _ = w.WriteString(datetime + " ")
-		return converter.RenderTryNext
 	}
 
-	// If no datetime attribute, try to get text content
+	// Always return RenderTryNext to allow processing of sibling text nodes
 	return converter.RenderTryNext
 }
