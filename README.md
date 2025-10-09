@@ -12,6 +12,7 @@ A CLI tool to convert Confluence pages to Markdown format with a single command.
 - Convert entire page trees with hierarchical structure
 - Download and embed images from Confluence pages
 - Support for Confluence Cloud with API authentication
+- Enhanced support for Confluence-specific elements (user references, status badges, time elements)
 - Clean, readable Markdown output
 - Cross-platform support (Linux, macOS, Windows)
 
@@ -56,6 +57,21 @@ Convert an entire page hierarchy:
 
 ```bash
 confluence-md tree <page-url> --email your-email@example.com --api-token your-api-token
+```
+
+### Convert HTML Files
+
+Convert Confluence HTML directly without API access (useful for testing or working with exported HTML):
+
+```bash
+# Convert from file
+confluence-md html page.html -o output.md
+
+# Convert from stdin
+cat page.html | confluence-md html -o output.md
+
+# Output to stdout
+confluence-md html page.html
 ```
 
 ### Common Options
@@ -108,12 +124,16 @@ If the rendered filename omits an extension, `.md` is appended automatically.
 
 ### Basic Elements
 
-| Element       | Confluence Tag       | Conversion                                                  |
-| ------------- | -------------------- | ----------------------------------------------------------- |
-| **Images**    | `ac:image`           | Downloaded and converted to local markdown image references |
-| **Emoticons** | `ac:emoticon`        | Converted to emoji shortnames or fallback text              |
-| **Tables**    | Standard HTML tables | Full table support with proper markdown formatting          |
-| **Lists**     | Standard HTML lists  | Nested lists with proper indentation                        |
+| Element             | Confluence Tag             | Conversion                                                              |
+| ------------------- | -------------------------- | ----------------------------------------------------------------------- |
+| **Images**          | `ac:image`                 | Downloaded and converted to local markdown image references             |
+| **Emoticons**       | `ac:emoticon`              | Converted to emoji fallback or shortnames                               |
+| **Tables**          | Standard HTML tables       | Full table support with proper markdown formatting                      |
+| **Lists**           | Standard HTML lists        | Nested lists with proper indentation                                    |
+| **User Links**      | `ac:link` + `ri:user`      | Converted to `@DisplayName` (or `@user(account-id)` if name not cached) |
+| **Time Elements**   | `<time>`                   | Datetime attribute extracted and displayed                              |
+| **Inline Comments** | `ac:inline-comment-marker` | Text preserved with comment reference                                   |
+| **Placeholders**    | `ac:placeholder`           | Converted to HTML comments                                              |
 
 ### Macros (`ac:structured-macro`)
 
@@ -126,9 +146,17 @@ If the rendered filename omits an extension, `.md` is appended automatically.
 | **`code`**          | ✅ Fully Supported          | Converted to markdown code blocks with language syntax highlighting |
 | **`mermaid-cloud`** | ✅ Fully Supported          | Converted to mermaid code blocks                                    |
 | **`expand`**        | ✅ Fully Supported          | Content extracted and rendered directly                             |
+| **`details`**       | ✅ Fully Supported          | Content extracted and rendered directly                             |
+| **`status`**        | ✅ Fully Supported          | Converted to emoji badges (🔴 **S1**, 🟡, 🟢, 🔵, ⚪)               |
 | **`toc`**           | ⚠️ Partially Supported      | Converted to `<!-- Table of Contents -->` comment                   |
 | **`children`**      | ⚠️ Partially Supported      | Converted to `<!-- Child Pages -->` comment                         |
 | **Other macros**    | Plan to support per request | Converted to `<!-- Unsupported macro: {name} -->` comments          |
+
+### User Name Resolution
+
+User references (`@user`) are automatically resolved to display names when converting pages via the `page` or `tree` commands
+
+**Note:** When using the `html` command (without Confluence API access), user names cannot be resolved and will always display as `@user(account-id)`.
 
 ## Output Structure
 

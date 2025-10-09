@@ -2,12 +2,14 @@ package plugin
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/jackchuka/confluence-md/internal/confluence"
 	"github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter/plugin/attachments"
 	"golang.org/x/net/html"
@@ -16,7 +18,9 @@ import (
 type ConfluencePlugin struct {
 	imageFolder        string
 	attachmentResolver attachments.Resolver
+	client             confluence.Client
 	currentPage        *model.ConfluencePage
+	userCache          map[string]string // accountID -> displayName
 }
 
 // NewConfluencePlugin creates a new plugin for Confluence elements
@@ -24,12 +28,98 @@ func NewConfluencePlugin(resolver attachments.Resolver, imageFolder string) *Con
 	return &ConfluencePlugin{
 		imageFolder:        imageFolder,
 		attachmentResolver: resolver,
+		userCache:          make(map[string]string),
+	}
+}
+
+// NewConfluencePluginWithClient creates a plugin with API client access for user resolution
+func NewConfluencePluginWithClient(client confluence.Client, resolver attachments.Resolver, imageFolder string) *ConfluencePlugin {
+	return &ConfluencePlugin{
+		imageFolder:        imageFolder,
+		attachmentResolver: resolver,
+		client:             client,
+		userCache:          make(map[string]string),
 	}
 }
 
 // SetCurrentPage records which page is currently being converted
 func (p *ConfluencePlugin) SetCurrentPage(page *model.ConfluencePage) {
 	p.currentPage = page
+
+	// Populate user cache from page metadata
+	if page != nil {
+		if page.CreatedBy.AccountID != "" && page.CreatedBy.DisplayName != "" {
+			p.userCache[page.CreatedBy.AccountID] = page.CreatedBy.DisplayName
+		}
+		if page.UpdatedBy.AccountID != "" && page.UpdatedBy.DisplayName != "" {
+			p.userCache[page.UpdatedBy.AccountID] = page.UpdatedBy.DisplayName
+		}
+
+		// Extract and cache all user mentions from page content
+		p.extractAndCacheUsers(page)
+	}
+}
+
+// extractAndCacheUsers finds all user references in the page HTML and adds them to cache
+func (p *ConfluencePlugin) extractAndCacheUsers(page *model.ConfluencePage) {
+	html := page.Content.Storage.Value
+	accountIDs := ExtractUserAccountIDs(html)
+
+	if p.client != nil && len(accountIDs) > 0 {
+		for _, accountID := range accountIDs {
+			if _, ok := p.userCache[accountID]; ok {
+				continue
+			}
+
+			user, err := p.client.GetUser(accountID)
+			if err != nil {
+				continue
+			}
+
+			if user.DisplayName != "" {
+				p.userCache[accountID] = user.DisplayName
+			} else if user.PublicName != "" {
+				p.userCache[accountID] = user.PublicName
+			}
+		}
+	}
+	log.Printf("Cached users: %+v", p.userCache)
+}
+
+// ExtractUserAccountIDs finds all user account IDs in the HTML
+func ExtractUserAccountIDs(html string) []string {
+	accountIDs := make(map[string]bool)
+
+	// Find all ri:account-id attributes
+	start := 0
+	for {
+		idx := strings.Index(html[start:], `ri:account-id="`)
+		if idx == -1 {
+			break
+		}
+		idx += start + len(`ri:account-id="`)
+
+		// Find the closing quote
+		endIdx := strings.Index(html[idx:], `"`)
+		if endIdx == -1 {
+			break
+		}
+
+		accountID := html[idx : idx+endIdx]
+		if accountID != "" {
+			accountIDs[accountID] = true
+		}
+
+		start = idx + endIdx + 1
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(accountIDs))
+	for id := range accountIDs {
+		result = append(result, id)
+	}
+
+	return result
 }
 
 // Name returns the plugin name
@@ -43,6 +133,10 @@ func (p *ConfluencePlugin) Init(conv *converter.Converter) error {
 	conv.Register.RendererFor("ac:image", converter.TagTypeInline, p.handleImage, converter.PriorityStandard)
 	conv.Register.RendererFor("ac:emoticon", converter.TagTypeInline, p.handleEmoticon, converter.PriorityStandard)
 	conv.Register.RendererFor("ac:structured-macro", converter.TagTypeBlock, p.handleMacro, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:link", converter.TagTypeInline, p.handleLink, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:inline-comment-marker", converter.TagTypeInline, p.handleInlineComment, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:placeholder", converter.TagTypeInline, p.handlePlaceholder, converter.PriorityStandard)
+	conv.Register.RendererFor("time", converter.TagTypeInline, p.handleTime, converter.PriorityStandard)
 
 	// Register custom table handler with higher priority to override default
 	conv.Register.RendererFor("table", converter.TagTypeBlock, p.handleTable, converter.PriorityEarly)
@@ -102,30 +196,10 @@ func (p *ConfluencePlugin) containsBrTags(n *html.Node) bool {
 }
 
 // getCellHTMLContent extracts the raw HTML content from a cell, preserving complex structures
-func (p *ConfluencePlugin) getCellHTMLContent(cell *html.Node) string {
+func (p *ConfluencePlugin) getCellHTMLContent(ctx converter.Context, cell *html.Node) string {
 	var result strings.Builder
 
-	for child := cell.FirstChild; child != nil; child = child.NextSibling {
-		switch child.Type {
-		case html.ElementNode:
-			// Render the child element as HTML
-			var buf strings.Builder
-			_ = html.Render(&buf, child)
-			result.WriteString(buf.String())
-			// Add space between elements but not newline to keep it in one table cell
-			if child.NextSibling != nil {
-				result.WriteString(" ")
-			}
-		case html.TextNode:
-			text := strings.TrimSpace(child.Data)
-			if text != "" {
-				result.WriteString(text)
-				if child.NextSibling != nil {
-					result.WriteString(" ")
-				}
-			}
-		}
-	}
+	p.flattenCellContent(ctx, &result, cell)
 
 	// Remove newlines to keep content in one table cell
 	content := result.String()
@@ -135,6 +209,57 @@ func (p *ConfluencePlugin) getCellHTMLContent(cell *html.Node) string {
 	content = strings.Join(strings.Fields(content), " ")
 
 	return content
+}
+
+// flattenCellContent recursively flattens cell content, converting headings to bold text
+func (p *ConfluencePlugin) flattenCellContent(ctx converter.Context, w *strings.Builder, n *html.Node) {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		switch child.Type {
+		case html.TextNode:
+			text := child.Data
+			if text != "" {
+				w.WriteString(text)
+			}
+		case html.ElementNode:
+			switch child.Data {
+			case "h1", "h2", "h3", "h4", "h5", "h6":
+				// Convert headings to bold text
+				w.WriteString("<strong>")
+				p.flattenCellContent(ctx, w, child)
+				w.WriteString("</strong>")
+			case "br":
+				w.WriteString("<br>")
+			case "p":
+				// Skip empty <p/> tags
+				if child.FirstChild != nil {
+					p.flattenCellContent(ctx, w, child)
+					if child.NextSibling != nil {
+						w.WriteString(" ")
+					}
+				}
+			case "strong", "b", "em", "i", "code", "a":
+				// Preserve these inline elements
+				var buf strings.Builder
+				_ = html.Render(&buf, child)
+				w.WriteString(buf.String())
+			case "ac:structured-macro":
+				p.handleMacro(ctx, w, child)
+			case "ac:emoticon":
+				p.handleEmoticon(ctx, w, child)
+			case "ac:link":
+				p.handleLink(ctx, w, child)
+			case "time":
+				p.handleTime(ctx, w, child)
+			case "ac:inline-comment-marker":
+				p.flattenCellContent(ctx, w, child)
+			case "ac:placeholder":
+				p.handlePlaceholder(ctx, w, child)
+			default:
+				// For other elements, recursively flatten
+				p.flattenCellContent(ctx, w, child)
+			}
+		}
+	}
 }
 
 // handleTable converts HTML tables to markdown tables, preserving HTML content for complex cells
@@ -163,15 +288,17 @@ func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 		}
 
 		var row []string
-		isHeader := false
+		hasOnlyHeaders := true
+		hasSomeTd := false
 
 		for cell := tr.FirstChild; cell != nil; cell = cell.NextSibling {
 			if cell.Type != html.ElementNode {
 				continue
 			}
 
-			if cell.Data == "th" {
-				isHeader = true
+			if cell.Data == "td" {
+				hasSomeTd = true
+				hasOnlyHeaders = false
 			}
 
 			if cell.Data == "td" || cell.Data == "th" {
@@ -179,12 +306,17 @@ func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 
 				if p.cellHasComplexContent(cell) {
 					// For complex cells, preserve the HTML content
-					cellContent = p.getCellHTMLContent(cell)
+					cellContent = p.getCellHTMLContent(ctx, cell)
 				} else {
 					// For simple cells, convert to markdown
 					var buf strings.Builder
-					if cell.FirstChild != nil {
-						ctx.RenderNodes(ctx, &buf, cell.FirstChild)
+					// Find first non-whitespace child
+					firstChild := cell.FirstChild
+					for firstChild != nil && firstChild.Type == html.TextNode && strings.TrimSpace(firstChild.Data) == "" {
+						firstChild = firstChild.NextSibling
+					}
+					if firstChild != nil {
+						ctx.RenderNodes(ctx, &buf, firstChild)
 					}
 					cellContent = strings.TrimSpace(buf.String())
 				}
@@ -200,7 +332,8 @@ func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 
 		if len(row) > 0 {
 			rows = append(rows, row)
-			isHeaderRow = append(isHeaderRow, isHeader)
+			// Only treat as header row if ALL cells are <th> (no <td>)
+			isHeaderRow = append(isHeaderRow, hasOnlyHeaders && !hasSomeTd)
 		}
 	}
 
@@ -223,6 +356,15 @@ func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 		}
 	}
 
+	// Check if this is a key-value table (no header rows at all)
+	hasHeaderRow := false
+	for _, isHeader := range isHeaderRow {
+		if isHeader {
+			hasHeaderRow = true
+			break
+		}
+	}
+
 	// Write table
 	for i, row := range rows {
 		_, _ = w.WriteString("| ")
@@ -234,8 +376,8 @@ func (p *ConfluencePlugin) handleTable(ctx converter.Context, w converter.Writer
 		}
 		_, _ = w.WriteString(" |\n")
 
-		// Add separator after header row
-		if i == 0 && isHeaderRow[0] {
+		// Add separator after header row OR after first row if no header exists
+		if (i == 0 && isHeaderRow[0]) || (i == 0 && !hasHeaderRow) {
 			_, _ = w.WriteString("|")
 			for j := 0; j < maxCols; j++ {
 				_, _ = w.WriteString("---|")
@@ -338,6 +480,10 @@ func (p *ConfluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		result = p.handleExpandMacro(ctx, n)
 	case "toc":
 		result, tryNext = p.handleTocMacro(n)
+	case "details":
+		result = p.handleDetailsMacro(ctx, n)
+	case "status":
+		result = p.handleStatusMacro(n)
 	case "children":
 		result = "<!-- Child Pages -->"
 	default:
@@ -552,4 +698,156 @@ func extractMacroParameter(selection *goquery.Selection, name string) string {
 		return ""
 	}
 	return strings.TrimSpace(param.Text())
+}
+
+// handleDetailsMacro extracts and returns the content without wrapping
+func (p *ConfluencePlugin) handleDetailsMacro(ctx converter.Context, n *html.Node) string {
+	content := p.convertNestedHTML(ctx, n)
+
+	if content == "" {
+		return ""
+	}
+
+	// Just return the content as-is without wrapping
+	return content + "\n\n"
+}
+
+// handleStatusMacro converts status badges to inline markdown
+func (p *ConfluencePlugin) handleStatusMacro(n *html.Node) string {
+	title := ""
+	colour := ""
+
+	// Extract parameters
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && child.Data == "ac:parameter" {
+			paramName := ""
+			for _, attr := range child.Attr {
+				if attr.Key == "ac:name" {
+					paramName = attr.Val
+					break
+				}
+			}
+
+			if paramName == "title" && child.FirstChild != nil {
+				title = child.FirstChild.Data
+			} else if paramName == "colour" && child.FirstChild != nil {
+				colour = child.FirstChild.Data
+			}
+		}
+	}
+
+	// Map colours to emojis for better visibility
+	emoji := ""
+	switch strings.ToLower(colour) {
+	case "red":
+		emoji = "🔴"
+	case "yellow":
+		emoji = "🟡"
+	case "green":
+		emoji = "🟢"
+	case "blue":
+		emoji = "🔵"
+	case "grey", "gray":
+		emoji = "⚪"
+	}
+
+	if title != "" {
+		if emoji != "" {
+			return fmt.Sprintf("%s **%s**", emoji, title)
+		}
+		return fmt.Sprintf("**[%s]**", title)
+	}
+
+	return ""
+}
+
+// handleLink converts Confluence user links and other ac:link elements
+func (p *ConfluencePlugin) handleLink(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	// Look for ri:user child node
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && child.Data == "ri:user" {
+			accountID := ""
+			for _, attr := range child.Attr {
+				if attr.Key == "ri:account-id" {
+					accountID = attr.Val
+					break
+				}
+			}
+
+			if accountID != "" {
+				if displayName, ok := p.userCache[accountID]; ok {
+					_, _ = fmt.Fprintf(w, " @%s ", displayName)
+				} else {
+					// Fallback to account ID
+					_, _ = fmt.Fprintf(w, " @user(%s) ", accountID)
+				}
+				return converter.RenderTryNext
+			}
+		}
+	}
+
+	// If not a user link, let default handler try
+	return converter.RenderTryNext
+}
+
+// handleInlineComment preserves inline comment markers
+func (p *ConfluencePlugin) handleInlineComment(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	// Extract the text content
+	var text string
+	if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
+		text = n.FirstChild.Data
+	}
+
+	// Extract comment reference ID
+	ref := ""
+	for _, attr := range n.Attr {
+		if attr.Key == "ac:ref" {
+			ref = attr.Val
+			break
+		}
+	}
+
+	// Write the text as-is, optionally add comment marker
+	if text != "" {
+		_, _ = w.WriteString(text)
+	}
+
+	if ref != "" {
+		_, _ = fmt.Fprintf(w, "<!-- comment-ref: %s -->", ref)
+	}
+
+	return converter.RenderSuccess
+}
+
+// handlePlaceholder converts placeholder text to comments
+func (p *ConfluencePlugin) handlePlaceholder(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	var text string
+	if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
+		text = strings.TrimSpace(n.FirstChild.Data)
+	}
+
+	if text != "" {
+		_, _ = fmt.Fprintf(w, "<!-- %s -->", text)
+	}
+
+	return converter.RenderSuccess
+}
+
+// handleTime extracts and formats time elements
+func (p *ConfluencePlugin) handleTime(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	datetime := ""
+	for _, attr := range n.Attr {
+		if attr.Key == "datetime" {
+			datetime = attr.Val
+			break
+		}
+	}
+
+	if datetime != "" {
+		_, _ = w.WriteString(datetime + " ")
+		return converter.RenderTryNext
+	}
+
+	// If no datetime attribute, try to get text content
+	return converter.RenderTryNext
 }

@@ -19,6 +19,7 @@ type Client interface {
 	GetPage(pageID string) (*model.ConfluencePage, error)
 	GetChildPages(pageID string) ([]*model.ConfluencePage, error)
 	DownloadAttachmentContent(attachment *model.ConfluenceAttachment) ([]byte, error)
+	GetUser(accountID string) (*model.ConfluenceUser, error)
 }
 
 // client represents a Confluence API client
@@ -174,28 +175,31 @@ func (c *client) DownloadAttachmentContent(attachment *model.ConfluenceAttachmen
 		return nil, err
 	}
 
+	// Create request for binary content
 	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create attachment request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+
 	req.SetBasicAuth(c.email, c.apiToken)
 	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download attachment: %w", err)
+		return nil, fmt.Errorf("failed to download attachment %s: %w", attachment.Title, err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d while downloading attachment", resp.StatusCode)
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("download attachment %s", attachment.Title))
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read attachment: %w", err)
+		return nil, fmt.Errorf("failed to read attachment content: %w", err)
 	}
 
 	return data, nil
@@ -228,6 +232,31 @@ func (c *client) normalizeDownloadLink(link string) (string, error) {
 		return "", fmt.Errorf("invalid attachment url %s: %w", full, err)
 	}
 	return parsed.String(), nil
+}
+
+// GetUser retrieves user information by account ID
+func (c *client) GetUser(accountID string) (*model.ConfluenceUser, error) {
+	endpoint := fmt.Sprintf("/wiki/rest/api/user?accountId=%s", url.QueryEscape(accountID))
+	fullURL := c.baseURL + endpoint
+
+	resp, err := c.makeRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user %s: %w", accountID, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("get user %s", accountID))
+	}
+
+	var user model.ConfluenceUser
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("failed to decode user response: %w", err)
+	}
+
+	return &user, nil
 }
 
 // handleErrorResponse handles error responses from the API

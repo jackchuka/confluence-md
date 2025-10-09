@@ -45,11 +45,18 @@ func NewConverter(client confluence.Client, opts ...Option) *Converter {
 		}
 	}
 
-	resolver := attachments.NewService(client)
-	if c.imageFolder != "" {
-		c.attachments = resolver
+	var resolver attachments.Resolver
+	if client != nil {
+		resolver = attachments.NewService(client)
+		if c.imageFolder != "" {
+			c.attachments = resolver
+		}
+		// Use the client-aware plugin constructor for user resolution
+		c.plugin = plugin.NewConfluencePluginWithClient(client, resolver, c.imageFolder)
+	} else {
+		// Use the basic plugin constructor when no client available
+		c.plugin = plugin.NewConfluencePlugin(resolver, c.imageFolder)
 	}
-	c.plugin = plugin.NewConfluencePlugin(resolver, c.imageFolder)
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
@@ -62,6 +69,11 @@ func NewConverter(client confluence.Client, opts ...Option) *Converter {
 	c.mdConverter = conv
 
 	return c
+}
+
+// ConvertHTML converts raw HTML string to Markdown
+func (c *Converter) ConvertHTML(html string) (string, error) {
+	return c.convertHtml(html)
 }
 
 // ConvertPage converts a Confluence page to Markdown

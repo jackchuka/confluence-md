@@ -67,8 +67,8 @@ func TestContainsBrTags(t *testing.T) {
 func TestGetCellHTMLContent(t *testing.T) {
 	plugin := &ConfluencePlugin{}
 	cell := findNode(t, `<table><tbody><tr><td><p>Text</p><a href="/link">Link</a></td></tr></tbody></table>`, "td")
-	got := plugin.getCellHTMLContent(cell)
-	if !strings.Contains(got, "<p>Text</p>") || !strings.Contains(got, "<a href=\"/link\">Link</a>") {
+	got := plugin.getCellHTMLContent(nil, cell)
+	if !strings.Contains(got, "Text") || !strings.Contains(got, "<a href=\"/link\">Link</a>") {
 		t.Fatalf("unexpected content: %q", got)
 	}
 }

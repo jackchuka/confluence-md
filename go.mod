@@ -7,6 +7,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.1
+	go.uber.org/mock v0.6.0
 	golang.org/x/net v0.44.0
 )
 
@@ -16,7 +17,6 @@ require (
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/mod v0.27.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/tools v0.36.0 // indirect
