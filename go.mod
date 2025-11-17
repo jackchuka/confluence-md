@@ -8,7 +8,7 @@ require (
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.1
 	go.uber.org/mock v0.6.0
-	golang.org/x/net v0.46.0
+	golang.org/x/net v0.47.0
 )
 
 require (
