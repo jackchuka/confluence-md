@@ -46,27 +46,27 @@ func (md *MarkdownDocument) WithFrontmatter() (string, error) {
 
 	// Write YAML frontmatter
 	builder.WriteString("---\n")
-	builder.WriteString(fmt.Sprintf("title: %q\n", md.Frontmatter.Title))
-	builder.WriteString(fmt.Sprintf("author: %q\n", md.Frontmatter.Author))
-	builder.WriteString(fmt.Sprintf("date: %q\n", md.Frontmatter.Date.Format(time.RFC3339)))
+	fmt.Fprintf(&builder, "title: %q\n", md.Frontmatter.Title)
+	fmt.Fprintf(&builder, "author: %q\n", md.Frontmatter.Author)
+	fmt.Fprintf(&builder, "date: %q\n", md.Frontmatter.Date.Format(time.RFC3339))
 
 	if len(md.Frontmatter.Labels) > 0 {
 		builder.WriteString("labels:\n")
 		for _, label := range md.Frontmatter.Labels {
-			builder.WriteString(fmt.Sprintf("  - %q\n", label))
+			fmt.Fprintf(&builder, "  - %q\n", label)
 		}
 	}
 
 	// Confluence reference
 	builder.WriteString("confluence:\n")
-	builder.WriteString(fmt.Sprintf("  pageId: %q\n", md.Frontmatter.Confluence.PageID))
-	builder.WriteString(fmt.Sprintf("  spaceKey: %q\n", md.Frontmatter.Confluence.SpaceKey))
-	builder.WriteString(fmt.Sprintf("  version: %d\n", md.Frontmatter.Confluence.Version))
-	builder.WriteString(fmt.Sprintf("  url: %q\n", md.Frontmatter.Confluence.URL))
+	fmt.Fprintf(&builder, "  pageId: %q\n", md.Frontmatter.Confluence.PageID)
+	fmt.Fprintf(&builder, "  spaceKey: %q\n", md.Frontmatter.Confluence.SpaceKey)
+	fmt.Fprintf(&builder, "  version: %d\n", md.Frontmatter.Confluence.Version)
+	fmt.Fprintf(&builder, "  url: %q\n", md.Frontmatter.Confluence.URL)
 
 	// Custom fields
 	for key, value := range md.Frontmatter.Custom {
-		builder.WriteString(fmt.Sprintf("%s: %v\n", key, value))
+		fmt.Fprintf(&builder, "%s: %v\n", key, value)
 	}
 
 	builder.WriteString("---\n\n")
