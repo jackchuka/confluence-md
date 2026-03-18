@@ -18,6 +18,12 @@ A CLI tool to convert Confluence pages to Markdown format with a single command.
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install jackchuka/tap/confluence-md
+```
+
 ### Pre-built Binaries
 
 Download the latest release for your platform from the [releases page](https://github.com/jackchuka/confluence-md/releases).
