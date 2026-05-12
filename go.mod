@@ -3,7 +3,7 @@ module github.com/jackchuka/confluence-md
 go 1.26.1
 
 require (
-	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.1
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.2
