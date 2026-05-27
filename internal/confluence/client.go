@@ -175,7 +175,46 @@ func (c *client) DownloadAttachmentContent(attachment *model.ConfluenceAttachmen
 		return nil, err
 	}
 
-	// Create request for binary content
+	urls := []string{downloadURL}
+	// Some Confluence Cloud sites reject API-token auth on the legacy
+	// /wiki/download/ media path (responding 401 with www-authenticate: OAuth).
+	// The v1 REST attachment endpoint honors token auth, so try it as a fallback.
+	if fallbackURL, ok := c.attachmentRESTDownloadURL(attachment); ok {
+		urls = append(urls, fallbackURL)
+	}
+
+	var lastResp *http.Response
+	for _, u := range urls {
+		resp, err := c.fetchBinary(u)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download attachment %s: %w", attachment.Title, err)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			defer func() {
+				_ = resp.Body.Close()
+			}()
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read attachment content: %w", err)
+			}
+			return data, nil
+		}
+
+		if lastResp != nil {
+			_ = lastResp.Body.Close()
+		}
+		lastResp = resp
+	}
+
+	defer func() {
+		_ = lastResp.Body.Close()
+	}()
+	return nil, c.handleErrorResponse(lastResp, fmt.Sprintf("download attachment %s", attachment.Title))
+}
+
+// fetchBinary issues an authenticated GET for raw attachment bytes.
+func (c *client) fetchBinary(downloadURL string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -185,24 +224,39 @@ func (c *client) DownloadAttachmentContent(attachment *model.ConfluenceAttachmen
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", c.userAgent)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download attachment %s: %w", attachment.Title, err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	return c.httpClient.Do(req)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp, fmt.Sprintf("download attachment %s", attachment.Title))
+// attachmentRESTDownloadURL builds the v1 REST download URL for an attachment,
+// which accepts API-token Basic auth where the legacy /wiki/download/ path may not.
+func (c *client) attachmentRESTDownloadURL(attachment *model.ConfluenceAttachment) (string, bool) {
+	if attachment.ID == "" {
+		return "", false
 	}
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read attachment content: %w", err)
+	pageID, ok := pageIDFromDownloadLink(attachment.DownloadLink)
+	if !ok {
+		return "", false
 	}
 
-	return data, nil
+	return fmt.Sprintf("%s/wiki/rest/api/content/%s/child/attachment/%s/download",
+		c.baseURL, pageID, attachment.ID), true
+}
+
+// pageIDFromDownloadLink extracts the parent page ID from a download link of the
+// form /download/attachments/{pageID}/{filename}?...
+func pageIDFromDownloadLink(link string) (string, bool) {
+	_, rest, found := strings.Cut(link, "/attachments/")
+	if !found {
+		return "", false
+	}
+
+	pageID, _, found := strings.Cut(rest, "/")
+	if !found || pageID == "" {
+		return "", false
+	}
+
+	return pageID, true
 }
 
 func (c *client) normalizeDownloadLink(link string) (string, error) {
