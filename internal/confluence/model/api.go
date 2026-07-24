@@ -22,6 +22,8 @@ type ConfluenceAPIPage struct {
 		By     struct {
 			Type        string `json:"type"`
 			AccountID   string `json:"accountId"`
+			UserKey     string `json:"userKey"`
+			Username    string `json:"username"`
 			DisplayName string `json:"displayName"`
 			Email       string `json:"email"`
 		} `json:"by"`
@@ -35,6 +37,8 @@ type ConfluenceAPIPage struct {
 		CreatedBy   struct {
 			Type        string `json:"type"`
 			AccountID   string `json:"accountId"`
+			UserKey     string `json:"userKey"`
+			Username    string `json:"username"`
 			DisplayName string `json:"displayName"`
 			Email       string `json:"email"`
 		} `json:"createdBy"`
@@ -87,6 +91,8 @@ type ConfluenceErrorResponse struct {
 type ConfluenceUser struct {
 	Type        string `json:"type"`
 	AccountID   string `json:"accountId"`
+	UserKey     string `json:"userKey"`
+	Username    string `json:"username"`
 	AccountType string `json:"accountType"`
 	Email       string `json:"email"`
 	PublicName  string `json:"publicName"`
@@ -136,11 +142,15 @@ func ConvertAPIPageToModel(apiPage *ConfluenceAPIPage) *ConfluencePage {
 		UpdatedAt:   apiPage.Version.When,
 		CreatedBy: User{
 			AccountID:   apiPage.History.CreatedBy.AccountID,
+			UserKey:     apiPage.History.CreatedBy.UserKey,
+			Username:    apiPage.History.CreatedBy.Username,
 			DisplayName: apiPage.History.CreatedBy.DisplayName,
 			Email:       apiPage.History.CreatedBy.Email,
 		},
 		UpdatedBy: User{
 			AccountID:   apiPage.Version.By.AccountID,
+			UserKey:     apiPage.Version.By.UserKey,
+			Username:    apiPage.Version.By.Username,
 			DisplayName: apiPage.Version.By.DisplayName,
 			Email:       apiPage.Version.By.Email,
 		},

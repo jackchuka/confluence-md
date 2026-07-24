@@ -46,76 +46,91 @@ func NewConfluencePluginWithClient(client confluence.Client, resolver attachment
 func (p *ConfluencePlugin) SetCurrentPage(page *model.ConfluencePage) {
 	p.currentPage = page
 
-	// Populate user cache from page metadata
+	// Populate user cache from page metadata. Cloud identifies users by
+	// account ID, self-hosted by user key, so cache under whichever is present.
 	if page != nil {
-		if page.CreatedBy.AccountID != "" && page.CreatedBy.DisplayName != "" {
-			p.userCache[page.CreatedBy.AccountID] = page.CreatedBy.DisplayName
-		}
-		if page.UpdatedBy.AccountID != "" && page.UpdatedBy.DisplayName != "" {
-			p.userCache[page.UpdatedBy.AccountID] = page.UpdatedBy.DisplayName
-		}
+		p.cacheUser(page.CreatedBy)
+		p.cacheUser(page.UpdatedBy)
 
 		// Extract and cache all user mentions from page content
 		p.extractAndCacheUsers(page)
 	}
 }
 
+// cacheUser records a user's display name under every identifier it exposes.
+func (p *ConfluencePlugin) cacheUser(user model.User) {
+	if user.DisplayName == "" {
+		return
+	}
+	for _, id := range []string{user.AccountID, user.UserKey} {
+		if id != "" {
+			p.userCache[id] = user.DisplayName
+		}
+	}
+}
+
 // extractAndCacheUsers finds all user references in the page HTML and adds them to cache
 func (p *ConfluencePlugin) extractAndCacheUsers(page *model.ConfluencePage) {
 	html := page.Content.Storage.Value
-	accountIDs := ExtractUserAccountIDs(html)
+	userIDs := ExtractUserIDs(html)
 
-	if p.client != nil && len(accountIDs) > 0 {
-		for _, accountID := range accountIDs {
-			if _, ok := p.userCache[accountID]; ok {
+	if p.client != nil && len(userIDs) > 0 {
+		for _, userID := range userIDs {
+			if _, ok := p.userCache[userID]; ok {
 				continue
 			}
 
-			user, err := p.client.GetUser(accountID)
+			user, err := p.client.GetUser(userID)
 			if err != nil {
 				continue
 			}
 
 			if user.DisplayName != "" {
-				p.userCache[accountID] = user.DisplayName
+				p.userCache[userID] = user.DisplayName
 			} else if user.PublicName != "" {
-				p.userCache[accountID] = user.PublicName
+				p.userCache[userID] = user.PublicName
 			}
 		}
 	}
 	log.Printf("Cached users: %+v", p.userCache)
 }
 
-// ExtractUserAccountIDs finds all user account IDs in the HTML
-func ExtractUserAccountIDs(html string) []string {
-	accountIDs := make(map[string]bool)
+// userRefAttrs are the ri:user identifier attributes that can be resolved to a
+// display name through the API: ri:account-id on Cloud and ri:userkey on
+// self-hosted instances. (ri:username is a handle and is rendered as-is.)
+var userRefAttrs = []string{`ri:account-id="`, `ri:userkey="`}
 
-	// Find all ri:account-id attributes
-	start := 0
-	for {
-		idx := strings.Index(html[start:], `ri:account-id="`)
-		if idx == -1 {
-			break
+// ExtractUserIDs finds all resolvable user identifiers referenced in the HTML.
+func ExtractUserIDs(html string) []string {
+	ids := make(map[string]bool)
+
+	for _, attr := range userRefAttrs {
+		start := 0
+		for {
+			idx := strings.Index(html[start:], attr)
+			if idx == -1 {
+				break
+			}
+			idx += start + len(attr)
+
+			// Find the closing quote
+			endIdx := strings.Index(html[idx:], `"`)
+			if endIdx == -1 {
+				break
+			}
+
+			id := html[idx : idx+endIdx]
+			if id != "" {
+				ids[id] = true
+			}
+
+			start = idx + endIdx + 1
 		}
-		idx += start + len(`ri:account-id="`)
-
-		// Find the closing quote
-		endIdx := strings.Index(html[idx:], `"`)
-		if endIdx == -1 {
-			break
-		}
-
-		accountID := html[idx : idx+endIdx]
-		if accountID != "" {
-			accountIDs[accountID] = true
-		}
-
-		start = idx + endIdx + 1
 	}
 
 	// Convert map to slice
-	result := make([]string, 0, len(accountIDs))
-	for id := range accountIDs {
+	result := make([]string, 0, len(ids))
+	for id := range ids {
 		result = append(result, id)
 	}
 
@@ -877,21 +892,31 @@ func (p *ConfluencePlugin) handleLink(ctx converter.Context, w converter.Writer,
 	// Look for ri:user child node
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type == html.ElementNode && child.Data == "ri:user" {
-			accountID := ""
+			var accountID, userKey, username string
 			for _, attr := range child.Attr {
-				if attr.Key == "ri:account-id" {
+				switch attr.Key {
+				case "ri:account-id":
 					accountID = attr.Val
-					break
+				case "ri:userkey":
+					userKey = attr.Val
+				case "ri:username":
+					username = attr.Val
 				}
 			}
 
-			if accountID != "" {
-				if displayName, ok := p.userCache[accountID]; ok {
+			// account-id (Cloud) and userkey (Server/DC) resolve to display
+			// names via the cache; username is already a human-readable handle.
+			if id := firstNonEmpty(accountID, userKey); id != "" {
+				if displayName, ok := p.userCache[id]; ok {
 					_, _ = fmt.Fprintf(w, " @%s ", displayName)
 				} else {
-					// Fallback to account ID
-					_, _ = fmt.Fprintf(w, " @user(%s) ", accountID)
+					_, _ = fmt.Fprintf(w, " @user(%s) ", id)
 				}
+				return converter.RenderTryNext
+			}
+
+			if username != "" {
+				_, _ = fmt.Fprintf(w, " @%s ", username)
 				return converter.RenderTryNext
 			}
 		}

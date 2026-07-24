@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter/model"
 	"github.com/jackchuka/confluence-md/internal/converter/plugin"
 )
@@ -32,11 +33,13 @@ func (c *Converter) postprocessMarkdown(markdown string) string {
 }
 
 // extractImageReferences finds image attachments referenced in the Confluence HTML.
-func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model.ImageRef {
+func (c *Converter) extractImageReferences(html, pageID string, site confluenceModel.SiteInfo) []model.ImageRef {
 	var imageRefs []model.ImageRef
 
 	acImageRegex := regexp.MustCompile(`<ac:image[^>]*>[\s\S]*?</ac:image>`)
 	matches := acImageRegex.FindAllString(html, -1)
+
+	root := strings.TrimSuffix(site.BaseURL, "/") + site.ContextPath
 
 	for _, imageHTML := range matches {
 		fileName := plugin.ParseConfluenceImage(imageHTML)
@@ -45,8 +48,8 @@ func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model
 		}
 
 		encodedFilename := url.QueryEscape(fileName)
-		actualURL := fmt.Sprintf("%s/wiki/download/attachments/%s/%s",
-			strings.TrimSuffix(baseURL, "/"), pageID, encodedFilename)
+		actualURL := fmt.Sprintf("%s/download/attachments/%s/%s",
+			root, pageID, encodedFilename)
 
 		imageRefs = append(imageRefs, model.ImageRef{
 			OriginalURL: actualURL,
@@ -59,8 +62,15 @@ func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model
 
 // fixMarkdownLinks converts Confluence-specific links into internal references.
 func fixMarkdownLinks(markdown string) string {
-	confLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(/wiki/spaces/([^/]+)/pages/(\d+)/[^)]+\)`)
-	return confLinkRegex.ReplaceAllString(markdown, "[$1](confluence://pageId/$3)")
+	// Cloud (/wiki/spaces/...) and self-hosted (/spaces/...) modern page links.
+	spacesLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\((?:/wiki)?/spaces/[^/]+/pages/(\d+)/[^)]+\)`)
+	markdown = spacesLinkRegex.ReplaceAllString(markdown, "[$1](confluence://pageId/$2)")
+
+	// Self-hosted legacy links: /pages/viewpage.action?pageId=12345
+	viewpageLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\([^)]*?/pages/viewpage\.action\?pageId=(\d+)[^)]*\)`)
+	markdown = viewpageLinkRegex.ReplaceAllString(markdown, "[$1](confluence://pageId/$2)")
+
+	return markdown
 }
 
 // fixNestedListSpacing removes extraneous blank lines in nested lists.

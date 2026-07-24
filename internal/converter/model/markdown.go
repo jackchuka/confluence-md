@@ -78,8 +78,8 @@ func (md *MarkdownDocument) WithFrontmatter() (string, error) {
 }
 
 // NewMarkdownDocument creates a new MarkdownDocument from a ConfluencePage
-func NewMarkdownDocument(page *model.ConfluencePage, baseURL string) (*MarkdownDocument, error) {
-	pageURL, err := page.GetURL(baseURL)
+func NewMarkdownDocument(page *model.ConfluencePage, site model.SiteInfo) (*MarkdownDocument, error) {
+	pageURL, err := page.GetURL(site)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate page URL: %w", err)
 	}

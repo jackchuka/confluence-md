@@ -79,7 +79,7 @@ func (c *Converter) ConvertHTML(html string) (string, error) {
 // ConvertPage converts a Confluence page to Markdown
 func (c *Converter) ConvertPage(
 	page *confluenceModel.ConfluencePage,
-	baseURL string,
+	site confluenceModel.SiteInfo,
 	outputDir string,
 ) (*model.MarkdownDocument, error) {
 	if err := page.Validate(); err != nil {
@@ -88,7 +88,7 @@ func (c *Converter) ConvertPage(
 	c.plugin.SetCurrentPage(page)
 
 	// Create markdown document
-	doc, err := model.NewMarkdownDocument(page, baseURL)
+	doc, err := model.NewMarkdownDocument(page, site)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create markdown document: %w", err)
 	}
@@ -101,7 +101,7 @@ func (c *Converter) ConvertPage(
 	}
 	doc.Content = markdown
 	// Extract image references for downloading
-	imageRefs := c.extractImageReferences(htmlContent, doc.Frontmatter.Confluence.PageID, baseURL)
+	imageRefs := c.extractImageReferences(htmlContent, doc.Frontmatter.Confluence.PageID, site)
 	doc.Images = imageRefs
 
 	if c.attachments != nil {

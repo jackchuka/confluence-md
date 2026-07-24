@@ -88,7 +88,8 @@ func TestConfluencePageValidate(t *testing.T) {
 
 func TestConfluencePageGetURL(t *testing.T) {
 	page := validPage()
-	url, err := page.GetURL("https://example.atlassian.net")
+	cloud := SiteInfo{BaseURL: "https://example.atlassian.net", Deployment: DeploymentCloud, ContextPath: "/wiki"}
+	url, err := page.GetURL(cloud)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,9 +99,35 @@ func TestConfluencePageGetURL(t *testing.T) {
 	}
 }
 
+func TestConfluencePageGetURLServer(t *testing.T) {
+	page := validPage()
+	server := SiteInfo{BaseURL: "https://wiki.example.com", Deployment: DeploymentServer, ContextPath: ""}
+	url, err := page.GetURL(server)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "https://wiki.example.com/pages/viewpage.action?pageId=123"
+	if url != want {
+		t.Fatalf("unexpected url: %s want %s", url, want)
+	}
+}
+
+func TestConfluencePageGetURLServerContextPath(t *testing.T) {
+	page := validPage()
+	server := SiteInfo{BaseURL: "https://example.com", Deployment: DeploymentServer, ContextPath: "/confluence"}
+	url, err := page.GetURL(server)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "https://example.com/confluence/pages/viewpage.action?pageId=123"
+	if url != want {
+		t.Fatalf("unexpected url: %s want %s", url, want)
+	}
+}
+
 func TestConfluencePageGetURLInvalidBase(t *testing.T) {
 	page := validPage()
-	if _, err := page.GetURL("://bad"); err == nil {
+	if _, err := page.GetURL(SiteInfo{BaseURL: "://bad", ContextPath: "/wiki"}); err == nil {
 		t.Fatal("expected error for invalid base url")
 	}
 }
