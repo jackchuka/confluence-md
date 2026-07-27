@@ -100,9 +100,8 @@ func (cp *ConfluencePage) Validate() error {
 		return fmt.Errorf("page title cannot be empty")
 	}
 
-	if cp.Content.Storage.Value == "" {
-		return fmt.Errorf("page content cannot be empty")
-	}
+	// Empty content is allowed: container/landing pages legitimately have no
+	// body of their own (their content is a children macro, or nothing).
 
 	if cp.SpaceKey == "" {
 		return fmt.Errorf("space key cannot be empty")

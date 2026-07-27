@@ -46,11 +46,11 @@ func TestConfluencePageValidate(t *testing.T) {
 			wantErr: "page title cannot be empty",
 		},
 		{
-			name: "missing content",
+			name: "empty content is allowed",
 			mutate: func(p *ConfluencePage) {
 				p.Content.Storage.Value = ""
 			},
-			wantErr: "page content cannot be empty",
+			wantErr: "",
 		},
 		{
 			name: "missing space key",

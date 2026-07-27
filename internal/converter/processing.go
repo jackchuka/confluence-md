@@ -60,6 +60,40 @@ func (c *Converter) extractImageReferences(html, pageID string, site confluenceM
 	return imageRefs
 }
 
+// fileMacroRegex matches Confluence file-view macros that embed an attachment.
+var fileMacroRegex = regexp.MustCompile(
+	`<ac:structured-macro[^>]*ac:name="(?:view-file|viewpdf|viewdoc|viewxls|viewppt|multimedia)"[\s\S]*?</ac:structured-macro>`)
+
+var riFilenameRegex = regexp.MustCompile(`ri:filename="([^"]+)"`)
+
+// extractFileReferences finds non-image attachments embedded via file-view
+// macros (view-file, viewpdf, …) so they can be downloaded alongside images.
+func (c *Converter) extractFileReferences(html, pageID string, site confluenceModel.SiteInfo) []model.ImageRef {
+	var fileRefs []model.ImageRef
+	seen := map[string]bool{}
+
+	root := strings.TrimSuffix(site.BaseURL, "/") + site.ContextPath
+
+	for _, macroHTML := range fileMacroRegex.FindAllString(html, -1) {
+		m := riFilenameRegex.FindStringSubmatch(macroHTML)
+		if len(m) < 2 || m[1] == "" || seen[m[1]] {
+			continue
+		}
+		fileName := m[1]
+		seen[fileName] = true
+
+		actualURL := fmt.Sprintf("%s/download/attachments/%s/%s",
+			root, pageID, url.QueryEscape(fileName))
+
+		fileRefs = append(fileRefs, model.ImageRef{
+			OriginalURL: actualURL,
+			FileName:    fileName,
+		})
+	}
+
+	return fileRefs
+}
+
 // fixMarkdownLinks converts Confluence-specific links into internal references.
 func fixMarkdownLinks(markdown string) string {
 	// Cloud (/wiki/spaces/...) and self-hosted (/spaces/...) modern page links.

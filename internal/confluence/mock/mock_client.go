@@ -114,3 +114,18 @@ func (mr *MockClientMockRecorder) GetUser(userID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUser", reflect.TypeOf((*MockClient)(nil).GetUser), userID)
 }
+
+// SearchByCQL mocks base method.
+func (m *MockClient) SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SearchByCQL", cql, limit)
+	ret0, _ := ret[0].([]*model.ConfluencePage)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SearchByCQL indicates an expected call of SearchByCQL.
+func (mr *MockClientMockRecorder) SearchByCQL(cql, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SearchByCQL", reflect.TypeOf((*MockClient)(nil).SearchByCQL), cql, limit)
+}

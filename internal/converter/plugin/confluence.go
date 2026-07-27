@@ -20,6 +20,7 @@ type ConfluencePlugin struct {
 	attachmentResolver attachments.Resolver
 	client             confluence.Client
 	currentPage        *model.ConfluencePage
+	site               model.SiteInfo // instance context for building cross-page links
 	userCache          map[string]string // accountID -> displayName
 }
 
@@ -40,6 +41,12 @@ func NewConfluencePluginWithClient(client confluence.Client, resolver attachment
 		client:             client,
 		userCache:          make(map[string]string),
 	}
+}
+
+// SetSite records the Confluence instance context (base URL, deployment,
+// context path) used to build absolute links to other pages.
+func (p *ConfluencePlugin) SetSite(site model.SiteInfo) {
+	p.site = site
 }
 
 // SetCurrentPage records which page is currently being converted
@@ -546,26 +553,91 @@ func (p *ConfluencePlugin) handleImage(ctx converter.Context, w converter.Writer
 	return converter.RenderSuccess
 }
 
+// emoticonEmoji maps classic Confluence emoticon names (which carry no
+// ac:emoji-fallback glyph on older Server/DC instances) to a Unicode symbol.
+// Keys are normalized via normalizeEmoticonName (lowercased, separators
+// stripped) so aliases like "minus", "minus sign" and "minus-sign" all match.
+var emoticonEmoji = map[string]string{
+	"tick":         "✔️",
+	"check":        "✔️",
+	"checkmark":    "✔️",
+	"cross":        "❌",
+	"error":        "❌",
+	"minus":        "➖",
+	"minussign":    "➖",
+	"plus":         "➕",
+	"add":          "➕",
+	"information":  "ℹ️",
+	"info":         "ℹ️",
+	"warning":      "⚠️",
+	"question":     "❓",
+	"thumbsup":     "👍",
+	"thumbsdown":   "👎",
+	"lighton":      "💡",
+	"star":         "⭐",
+	"yellowstar":   "⭐",
+	"redstar":      "⭐",
+	"greenstar":    "⭐",
+	"bluestar":     "⭐",
+	"heart":        "❤️",
+	"brokenheart":  "💔",
+	"smile":        "🙂",
+	"sad":          "🙁",
+	"cheeky":       "😜",
+	"laugh":        "😄",
+	"wink":         "😉",
+}
+
+// normalizeEmoticonName lowercases a name and strips spaces, hyphens and
+// underscores so lookups are resilient to naming variants.
+func normalizeEmoticonName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch r {
+		case ' ', '-', '_':
+			// skip separators
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func (p *ConfluencePlugin) handleEmoticon(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	var fallback, shortname, name string
 	for _, attr := range n.Attr {
-		if attr.Key == "ac:emoji-fallback" && attr.Val != "" {
-			_, _ = w.WriteString(attr.Val + " ")
+		switch attr.Key {
+		case "ac:emoji-fallback":
+			fallback = attr.Val
+		case "ac:emoji-shortname":
+			shortname = attr.Val
+		case "ac:name":
+			name = attr.Val
+		}
+	}
+
+	// Prefer the real emoji glyph when Confluence provides one.
+	if fallback != "" {
+		_, _ = w.WriteString(fallback + " ")
+		return converter.RenderTryNext
+	}
+
+	// Map classic (glyph-less) emoticons to a Unicode symbol.
+	if name != "" {
+		if emoji, ok := emoticonEmoji[normalizeEmoticonName(name)]; ok {
+			_, _ = w.WriteString(emoji + " ")
 			return converter.RenderTryNext
 		}
 	}
 
-	for _, attr := range n.Attr {
-		if attr.Key == "ac:emoji-shortname" && attr.Val != "" {
-			_, _ = w.WriteString(attr.Val + " ")
-			return converter.RenderTryNext
-		}
+	// Fall back to the shortname (e.g. :check_mark:), then the raw name.
+	if shortname != "" {
+		_, _ = w.WriteString(shortname + " ")
+		return converter.RenderTryNext
 	}
-
-	for _, attr := range n.Attr {
-		if attr.Key == "ac:name" && attr.Val != "" {
-			_, _ = fmt.Fprintf(w, ":%s:", attr.Val)
-			return converter.RenderTryNext
-		}
+	if name != "" {
+		_, _ = fmt.Fprintf(w, ":%s:", name)
+		return converter.RenderTryNext
 	}
 
 	_, _ = w.WriteString(":emoji: ")
@@ -600,6 +672,8 @@ func (p *ConfluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		result = p.handleBlockquoteMacro(ctx, n, "💡", "Tip")
 	case "code":
 		result = p.handleCodeMacro(n)
+	case "markdown":
+		result = p.handleMarkdownMacro(n)
 	case "mermaid-cloud":
 		result = p.handleMermaidMacro(n)
 	case "expand":
@@ -610,8 +684,14 @@ func (p *ConfluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		result = p.handleDetailsMacro(ctx, n)
 	case "status":
 		result = p.handleStatusMacro(n)
-	case "children":
-		result = "<!-- Child Pages -->"
+	case "children", "pagetree":
+		result = p.handleChildrenMacro()
+	case "view-file", "viewpdf", "viewdoc", "viewxls", "viewppt", "multimedia":
+		result = p.handleFileMacro(n)
+	case "jira":
+		result = p.handleJiraMacro(n)
+	case "contentbylabel":
+		result = p.handleContentByLabelMacro(n)
 	default:
 		result = fmt.Sprintf("<!-- Unsupported macro: %s -->", macroName)
 	}
@@ -621,6 +701,144 @@ func (p *ConfluencePlugin) handleMacro(ctx converter.Context, w converter.Writer
 		return converter.RenderTryNext
 	}
 	return converter.RenderSuccess
+}
+
+// handleFileMacro converts a Confluence file-view macro (view-file, viewpdf,
+// …) that embeds an attachment into a markdown link to the locally downloaded
+// file. The actual download is scheduled separately (see extractFileReferences).
+func (p *ConfluencePlugin) handleFileMacro(n *html.Node) string {
+	filename := findAttachmentFilename(n)
+	if filename == "" {
+		return "<!-- Unsupported macro: view-file (no attachment) -->"
+	}
+	localPath := p.imageFolder + "/" + filename
+	return fmt.Sprintf("[%s](%s)", filename, url.PathEscape(localPath))
+}
+
+// findAttachmentFilename returns the ri:filename of the first ri:attachment
+// found anywhere within the node subtree.
+func findAttachmentFilename(n *html.Node) string {
+	var found string
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if found != "" {
+			return
+		}
+		if node.Type == html.ElementNode && node.Data == "ri:attachment" {
+			if fn := attrValue(node, "ri:filename"); fn != "" {
+				found = fn
+				return
+			}
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return found
+}
+
+// macroParam returns the trimmed text of the macro's ac:parameter with the
+// given ac:name, or "" if absent.
+func macroParam(n *html.Node, name string) string {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && child.Data == "ac:parameter" &&
+			attrValue(child, "ac:name") == name {
+			return strings.TrimSpace(nodeText(child))
+		}
+	}
+	return ""
+}
+
+// handleChildrenMacro materializes a children / pagetree macro into a markdown
+// list of links to the page's child pages, fetched via the API. The list is
+// wrapped in <!-- Child Pages -->…<!-- /Child Pages --> markers so downstream
+// tooling can recognize (and, for empty wrapper pages, strip) it. Without API
+// access or children, it degrades to the bare marker comment.
+func (p *ConfluencePlugin) handleChildrenMacro() string {
+	const openMarker = "<!-- Child Pages -->"
+	if p.client == nil || p.currentPage == nil || p.currentPage.ID == "" {
+		return openMarker
+	}
+
+	children, err := p.client.GetChildPages(p.currentPage.ID)
+	if err != nil || len(children) == 0 {
+		return openMarker
+	}
+
+	var b strings.Builder
+	b.WriteString(openMarker + "\n")
+	for _, ch := range children {
+		space := ch.SpaceKey
+		if space == "" && p.currentPage != nil {
+			space = p.currentPage.SpaceKey
+		}
+		if u := p.pageDisplayURL(space, ch.Title); u != "" {
+			fmt.Fprintf(&b, "- [%s](%s)\n", ch.Title, u)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", ch.Title)
+		}
+	}
+	b.WriteString("<!-- /Child Pages -->")
+	return b.String()
+}
+
+// handleJiraMacro renders a Jira issue macro as its issue key. The live status
+// would require the Jira API, which is out of scope; the key is preserved so
+// the reference isn't lost.
+func (p *ConfluencePlugin) handleJiraMacro(n *html.Node) string {
+	key := macroParam(n, "key")
+	if key == "" {
+		return "<!-- Unsupported macro: jira (no key) -->"
+	}
+	return key
+}
+
+// handleContentByLabelMacro resolves a dynamic contentbylabel macro into a
+// static markdown list of links by running its CQL query against the API. The
+// resulting list is not present in page storage, so without API access (or on
+// error) it degrades to a comment recording the query.
+func (p *ConfluencePlugin) handleContentByLabelMacro(n *html.Node) string {
+	cql := macroParam(n, "cql")
+	if cql == "" {
+		// Older macros express the query as labels (+ optional spaces) instead
+		// of a full CQL string; synthesize an equivalent query.
+		labels := firstNonEmpty(macroParam(n, "labels"), macroParam(n, "label"))
+		if labels != "" {
+			var quoted []string
+			for _, l := range strings.Fields(strings.ReplaceAll(labels, ",", " ")) {
+				quoted = append(quoted, fmt.Sprintf("%q", l))
+			}
+			cql = "label in (" + strings.Join(quoted, ", ") + ") and type = page"
+		}
+	}
+
+	if cql == "" {
+		return "<!-- Unsupported macro: contentbylabel (no query) -->"
+	}
+
+	if p.client == nil {
+		return fmt.Sprintf("<!-- contentbylabel: %s -->", cql)
+	}
+
+	pages, err := p.client.SearchByCQL(cql, 100)
+	if err != nil || len(pages) == 0 {
+		return fmt.Sprintf("<!-- contentbylabel: %s -->", cql)
+	}
+
+	var b strings.Builder
+	for _, pg := range pages {
+		space := pg.SpaceKey
+		if space == "" && p.currentPage != nil {
+			space = p.currentPage.SpaceKey
+		}
+		if u := p.pageDisplayURL(space, pg.Title); u != "" {
+			fmt.Fprintf(&b, "- [%s](%s)\n", pg.Title, u)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", pg.Title)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (p *ConfluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.Node, emoji, label string) string {
@@ -648,16 +866,46 @@ func (p *ConfluencePlugin) handleBlockquoteMacro(ctx converter.Context, n *html.
 }
 
 // handleCodeMacro converts code macros to code blocks
-func (p *ConfluencePlugin) handleCodeMacro(n *html.Node) string {
-	// Convert node to goquery selection for compatibility with existing logic
+// macroSelection renders a macro node into a goquery selection along with its
+// inner HTML — the two inputs the macro body and parameter extractors need.
+func macroSelection(n *html.Node) (*goquery.Selection, string, error) {
 	var buf strings.Builder
 	_ = html.Render(&buf, n)
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(buf.String()))
 	if err != nil {
+		return nil, "", err
+	}
+	rawHTML, _ := doc.Selection.Html()
+	return doc.Selection, rawHTML, nil
+}
+
+// handleMarkdownMacro emits the body of a markdown macro verbatim. The macro
+// wraps authored Markdown in a CDATA plain-text body, so the content needs no
+// conversion — only unwrapping.
+func (p *ConfluencePlugin) handleMarkdownMacro(n *html.Node) string {
+	selection, rawHTML, err := macroSelection(n)
+	if err != nil {
 		return fmt.Sprintf("<!-- Error rendering macro: %s -->", err.Error())
 	}
-	selection := doc.Selection
-	rawHTML, _ := selection.Html()
+
+	content := extractPlainTextBodyContent(selection, rawHTML)
+	if content == "" {
+		content = extractCodeContent(rawHTML)
+	}
+	if strings.TrimSpace(content) == "" {
+		return "<!-- Empty macro: markdown -->"
+	}
+
+	// Surrounding blank lines keep the block from merging into adjacent text;
+	// postprocessing collapses any excess.
+	return "\n" + content + "\n"
+}
+
+func (p *ConfluencePlugin) handleCodeMacro(n *html.Node) string {
+	selection, rawHTML, err := macroSelection(n)
+	if err != nil {
+		return fmt.Sprintf("<!-- Error rendering macro: %s -->", err.Error())
+	}
 	language := extractLanguageParameter(rawHTML)
 
 	code := extractPlainTextBodyContent(selection, rawHTML)
@@ -887,43 +1135,193 @@ func (p *ConfluencePlugin) handleStatusMacro(n *html.Node) string {
 	return ""
 }
 
-// handleLink converts Confluence user links and other ac:link elements
+// handleLink converts Confluence ac:link elements. Confluence encodes several
+// link flavors as <ac:link> with a resource-identifier child (ri:user,
+// ri:page, ri:attachment). The default HTML renderer doesn't understand these
+// tags, so a page link with no explicit body would otherwise vanish entirely.
 func (p *ConfluencePlugin) handleLink(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
-	// Look for ri:user child node
+	var userRef, pageRef, attachmentRef *html.Node
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == html.ElementNode && child.Data == "ri:user" {
-			var accountID, userKey, username string
-			for _, attr := range child.Attr {
-				switch attr.Key {
-				case "ri:account-id":
-					accountID = attr.Val
-				case "ri:userkey":
-					userKey = attr.Val
-				case "ri:username":
-					username = attr.Val
-				}
-			}
-
-			// account-id (Cloud) and userkey (Server/DC) resolve to display
-			// names via the cache; username is already a human-readable handle.
-			if id := firstNonEmpty(accountID, userKey); id != "" {
-				if displayName, ok := p.userCache[id]; ok {
-					_, _ = fmt.Fprintf(w, " @%s ", displayName)
-				} else {
-					_, _ = fmt.Fprintf(w, " @user(%s) ", id)
-				}
-				return converter.RenderTryNext
-			}
-
-			if username != "" {
-				_, _ = fmt.Fprintf(w, " @%s ", username)
-				return converter.RenderTryNext
-			}
+		if child.Type != html.ElementNode {
+			continue
+		}
+		switch child.Data {
+		case "ri:user":
+			userRef = child
+		case "ri:page":
+			pageRef = child
+		case "ri:attachment":
+			attachmentRef = child
 		}
 	}
 
-	// If not a user link, let default handler try
+	switch {
+	case userRef != nil:
+		return p.renderUserLink(w, userRef)
+	case pageRef != nil:
+		return p.renderPageLink(w, n, pageRef)
+	case attachmentRef != nil:
+		return p.renderAttachmentLink(w, n, attachmentRef)
+	}
+
+	// Unknown ac:link flavor: at least preserve any explicit body text so the
+	// content isn't silently dropped.
+	if body := linkBodyText(n); body != "" {
+		_, _ = w.WriteString(body)
+		return converter.RenderSuccess
+	}
 	return converter.RenderTryNext
+}
+
+// renderUserLink converts an ac:link wrapping a ri:user reference to a mention.
+func (p *ConfluencePlugin) renderUserLink(w converter.Writer, ref *html.Node) converter.RenderStatus {
+	var accountID, userKey, username string
+	for _, attr := range ref.Attr {
+		switch attr.Key {
+		case "ri:account-id":
+			accountID = attr.Val
+		case "ri:userkey":
+			userKey = attr.Val
+		case "ri:username":
+			username = attr.Val
+		}
+	}
+
+	// account-id (Cloud) and userkey (Server/DC) resolve to display names via
+	// the cache; username is already a human-readable handle.
+	if id := firstNonEmpty(accountID, userKey); id != "" {
+		if displayName, ok := p.userCache[id]; ok {
+			_, _ = fmt.Fprintf(w, " @%s ", displayName)
+		} else {
+			_, _ = fmt.Fprintf(w, " @user(%s) ", id)
+		}
+		return converter.RenderTryNext
+	}
+
+	if username != "" {
+		_, _ = fmt.Fprintf(w, " @%s ", username)
+		return converter.RenderTryNext
+	}
+
+	return converter.RenderTryNext
+}
+
+// renderPageLink converts an ac:link wrapping a ri:page reference to a markdown
+// link. The display text comes from an explicit link body when present, else
+// the referenced page title; the URL is a best-effort "pretty" display URL
+// built from the space key and title (no API lookup).
+func (p *ConfluencePlugin) renderPageLink(w converter.Writer, link, ref *html.Node) converter.RenderStatus {
+	title := attrValue(ref, "ri:content-title")
+	spaceKey := attrValue(ref, "ri:space-key")
+	if spaceKey == "" && p.currentPage != nil {
+		spaceKey = p.currentPage.SpaceKey
+	}
+
+	text := firstNonEmpty(linkBodyText(link), title)
+	if text == "" {
+		return converter.RenderTryNext
+	}
+
+	if u := p.pageDisplayURL(spaceKey, title); u != "" {
+		_, _ = fmt.Fprintf(w, "[%s](%s)", text, u)
+	} else {
+		_, _ = w.WriteString(text)
+	}
+	return converter.RenderSuccess
+}
+
+// renderAttachmentLink converts an ac:link wrapping a ri:attachment reference.
+func (p *ConfluencePlugin) renderAttachmentLink(w converter.Writer, link, ref *html.Node) converter.RenderStatus {
+	filename := attrValue(ref, "ri:filename")
+	text := firstNonEmpty(linkBodyText(link), filename)
+	if text == "" {
+		return converter.RenderTryNext
+	}
+
+	if u := p.attachmentDisplayURL(filename); u != "" {
+		_, _ = fmt.Fprintf(w, "[%s](%s)", text, u)
+	} else {
+		_, _ = w.WriteString(text)
+	}
+	return converter.RenderSuccess
+}
+
+// pageDisplayURL builds a best-effort "pretty" URL to another Confluence page
+// from its space key and title (Variant A: no API lookup). Returns "" when
+// there isn't enough site context to build an absolute URL.
+func (p *ConfluencePlugin) pageDisplayURL(spaceKey, title string) string {
+	if p.site.BaseURL == "" || spaceKey == "" || title == "" {
+		return ""
+	}
+	root := strings.TrimSuffix(p.site.BaseURL, "/") + p.site.ContextPath
+	// Confluence display URLs encode spaces as '+'.
+	escaped := strings.ReplaceAll(url.PathEscape(title), "%20", "+")
+	return fmt.Sprintf("%s/display/%s/%s", root, url.PathEscape(spaceKey), escaped)
+}
+
+// attachmentDisplayURL builds a best-effort download URL for an attachment on
+// the current page. Returns "" when there isn't enough context.
+func (p *ConfluencePlugin) attachmentDisplayURL(filename string) string {
+	if p.site.BaseURL == "" || filename == "" || p.currentPage == nil || p.currentPage.ID == "" {
+		return ""
+	}
+	root := strings.TrimSuffix(p.site.BaseURL, "/") + p.site.ContextPath
+	return fmt.Sprintf("%s/download/attachments/%s/%s", root, p.currentPage.ID, url.PathEscape(filename))
+}
+
+// attrValue returns the value of the named attribute, or "" if absent.
+func attrValue(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+// linkBodyText returns the trimmed plain-text content of an ac:link-body or
+// ac:plain-text-link-body node anywhere within the ac:link subtree. The search
+// is recursive because the HTML5 parser treats a self-closing <ri:page/> as an
+// open tag, nesting a following <ac:link-body> inside it rather than beside it.
+func linkBodyText(link *html.Node) string {
+	var found *html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if found != nil {
+			return
+		}
+		if n.Type == html.ElementNode &&
+			(n.Data == "ac:link-body" || n.Data == "ac:plain-text-link-body") {
+			found = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for c := link.FirstChild; c != nil; c = c.NextSibling {
+		walk(c)
+	}
+	if found == nil {
+		return ""
+	}
+	return strings.TrimSpace(nodeText(found))
+}
+
+// nodeText collects the concatenated text of a node subtree.
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return b.String()
 }
 
 // handleInlineComment preserves inline comment markers

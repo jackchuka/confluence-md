@@ -16,6 +16,7 @@ import (
 )
 
 const maxImageSizeBytes = 10 * 1024 * 1024
+const maxFileSizeBytes = 100 * 1024 * 1024
 
 // Converter handles HTML to Markdown conversion
 type Converter struct {
@@ -85,6 +86,7 @@ func (c *Converter) ConvertPage(
 	if err := page.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid page: %w", err)
 	}
+	c.plugin.SetSite(site)
 	c.plugin.SetCurrentPage(page)
 
 	// Create markdown document
@@ -100,13 +102,16 @@ func (c *Converter) ConvertPage(
 		return nil, fmt.Errorf("failed to convert HTML to Markdown: %w", err)
 	}
 	doc.Content = markdown
-	// Extract image references for downloading
-	imageRefs := c.extractImageReferences(htmlContent, doc.Frontmatter.Confluence.PageID, site)
-	doc.Images = imageRefs
+	// Extract image and file references for downloading
+	doc.Images = c.extractImageReferences(htmlContent, doc.Frontmatter.Confluence.PageID, site)
+	doc.Files = c.extractFileReferences(htmlContent, doc.Frontmatter.Confluence.PageID, site)
 
 	if c.attachments != nil {
 		if err := c.downloadImages(doc, page, outputDir); err != nil {
 			return nil, fmt.Errorf("failed to download images: %w", err)
+		}
+		if err := c.downloadFiles(doc, page, outputDir); err != nil {
+			return nil, fmt.Errorf("failed to download files: %w", err)
 		}
 	}
 
@@ -118,37 +123,60 @@ func (c *Converter) downloadImages(doc *model.MarkdownDocument, page *confluence
 	if doc == nil {
 		return fmt.Errorf("document cannot be nil")
 	}
-
 	if len(doc.Images) == 0 {
 		return nil
 	}
-
 	if page == nil {
 		return fmt.Errorf("page context is required to download images")
 	}
+	return c.downloadRefs(doc.Images, page, outputDir, maxImageSizeBytes, "image")
+}
 
-	for i := range doc.Images {
-		imageRef := &doc.Images[i]
-		attachment, data, err := c.attachments.DownloadAttachment(page, imageRef.FileName, 0)
+// downloadFiles fetches non-image attachments (view-file macros) and writes them to disk.
+func (c *Converter) downloadFiles(doc *model.MarkdownDocument, page *confluenceModel.ConfluencePage, outputDir string) error {
+	if doc == nil {
+		return fmt.Errorf("document cannot be nil")
+	}
+	if len(doc.Files) == 0 {
+		return nil
+	}
+	if page == nil {
+		return fmt.Errorf("page context is required to download files")
+	}
+	return c.downloadRefs(doc.Files, page, outputDir, maxFileSizeBytes, "file")
+}
+
+// downloadRefs downloads a set of attachment references into the image folder,
+// enforcing a per-item size cap (maxSize <= 0 disables the cap). kind labels
+// the item in log and error messages ("image" or "file").
+func (c *Converter) downloadRefs(refs []model.ImageRef, page *confluenceModel.ConfluencePage, outputDir string, maxSize int64, kind string) error {
+	for i := range refs {
+		ref := &refs[i]
+		attachment, data, err := c.attachments.DownloadAttachment(page, ref.FileName, 0)
 		if err != nil {
-			return fmt.Errorf("failed to download image %s: %w", imageRef.FileName, err)
+			// A single missing/undownloadable attachment must not abort the
+			// whole page (common for stale references to deleted files); warn
+			// and keep the markdown reference pointing at the expected path.
+			fmt.Printf("⚠️  Warning: skipping %s %s: %v\n", kind, ref.FileName, err)
+			continue
 		}
 
-		if attachment.FileSize > maxImageSizeBytes {
-			return fmt.Errorf("image %s too large: %d bytes (max %d)", imageRef.FileName, attachment.FileSize, maxImageSizeBytes)
+		if maxSize > 0 && attachment.FileSize > maxSize {
+			fmt.Printf("⚠️  Warning: skipping %s %s: too large (%d bytes, max %d)\n", kind, ref.FileName, attachment.FileSize, maxSize)
+			continue
 		}
 
-		imageRef.ContentType = attachment.MediaType
-		imageRef.Size = attachment.FileSize
+		ref.ContentType = attachment.MediaType
+		ref.Size = attachment.FileSize
 
-		filePath := filepath.Join(outputDir, c.imageFolder, imageRef.FileName)
-		fmt.Println("Downloading image:", imageRef.FileName, "to", filePath)
+		filePath := filepath.Join(outputDir, c.imageFolder, ref.FileName)
+		fmt.Printf("Downloading %s: %s to %s\n", kind, ref.FileName, filePath)
 		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return fmt.Errorf("failed to create image directory: %w", err)
+			return fmt.Errorf("failed to create %s directory: %w", kind, err)
 		}
 
 		if err := os.WriteFile(filePath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write image %s: %w", imageRef.FileName, err)
+			return fmt.Errorf("failed to write %s %s: %w", kind, ref.FileName, err)
 		}
 	}
 

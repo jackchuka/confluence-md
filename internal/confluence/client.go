@@ -21,6 +21,7 @@ type Client interface {
 	DownloadAttachmentContent(attachment *model.ConfluenceAttachment) ([]byte, error)
 	GetUser(userID string) (*model.ConfluenceUser, error)
 	FindPageID(spaceKey, title string) (string, error)
+	SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error)
 }
 
 // Config holds the connection settings for a Confluence instance.
@@ -404,6 +405,49 @@ func (c *client) FindPageID(spaceKey, title string) (string, error) {
 	}
 
 	return searchResult.Results[0].ID, nil
+}
+
+const defaultSearchLimit = 50
+
+// SearchByCQL runs a CQL query and returns the matching pages. It is used to
+// resolve dynamic list macros (e.g. contentbylabel) into concrete page links.
+func (c *client) SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error) {
+	if strings.TrimSpace(cql) == "" {
+		return nil, fmt.Errorf("cql query is required")
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+
+	query := url.Values{
+		"cql":    []string{cql},
+		"limit":  []string{strconv.Itoa(limit)},
+		"expand": []string{"space,version"},
+	}
+	fullURL := c.apiBase + "/content/search?" + query.Encode()
+
+	resp, err := c.makeRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run CQL search %q: %w", cql, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("run CQL search %q", cql))
+	}
+
+	var searchResult model.ConfluenceSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+		return nil, fmt.Errorf("failed to decode CQL search response: %w", err)
+	}
+
+	pages := make([]*model.ConfluencePage, 0, len(searchResult.Results))
+	for i := range searchResult.Results {
+		pages = append(pages, model.ConvertAPIPageToModel(&searchResult.Results[i]))
+	}
+	return pages, nil
 }
 
 // handleErrorResponse handles error responses from the API

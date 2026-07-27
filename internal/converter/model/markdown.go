@@ -13,6 +13,7 @@ type MarkdownDocument struct {
 	Frontmatter Frontmatter `yaml:",inline"`
 	Content     string      `yaml:"-"`
 	Images      []ImageRef  `yaml:"-"`
+	Files       []ImageRef  `yaml:"-"` // non-image attachments (view-file macros)
 }
 
 // Frontmatter represents YAML frontmatter for the Markdown document
@@ -99,6 +100,7 @@ func NewMarkdownDocument(page *model.ConfluencePage, site model.SiteInfo) (*Mark
 		},
 		Content: "", // Will be filled by converter
 		Images:  []ImageRef{},
+		Files:   []ImageRef{},
 	}
 
 	return doc, nil
