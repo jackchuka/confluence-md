@@ -19,24 +19,61 @@ type Client interface {
 	GetPage(pageID string) (*model.ConfluencePage, error)
 	GetChildPages(pageID string) ([]*model.ConfluencePage, error)
 	DownloadAttachmentContent(attachment *model.ConfluenceAttachment) ([]byte, error)
-	GetUser(accountID string) (*model.ConfluenceUser, error)
+	GetUser(userID string) (*model.ConfluenceUser, error)
+	FindPageID(spaceKey, title string) (string, error)
+	SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error)
+}
+
+// Config holds the connection settings for a Confluence instance.
+type Config struct {
+	// BaseURL is the scheme and host, e.g. "https://wiki.example.com".
+	BaseURL string
+	// Deployment selects the API dialect (cloud or server).
+	Deployment model.Deployment
+	// ContextPath is the path prefix in front of the REST API, without a
+	// trailing slash ("/wiki" for Cloud, "" or e.g. "/confluence" for server).
+	ContextPath string
+
+	// Email and APIToken are used for Cloud HTTP Basic authentication.
+	Email    string
+	APIToken string
+
+	// Token is a Personal Access Token used for self-hosted Bearer
+	// authentication.
+	Token string
 }
 
 // client represents a Confluence API client
 type client struct {
-	baseURL    string
-	email      string
-	apiToken   string
-	httpClient *http.Client
-	userAgent  string
+	siteURL     string // scheme://host, no trailing slash
+	contextPath string // "/wiki" for Cloud, "" or "/confluence" for server
+	apiBase     string // siteURL + contextPath + "/rest/api"
+	deployment  model.Deployment
+	email       string
+	apiToken    string
+	token       string
+	httpClient  *http.Client
+	userAgent   string
 }
 
 // NewClient creates a new Confluence API client
-func NewClient(baseURL, email, apiToken string) Client {
+func NewClient(cfg Config) Client {
+	deployment := cfg.Deployment
+	if deployment == "" {
+		deployment = model.DeploymentCloud
+	}
+
+	siteURL := strings.TrimSuffix(cfg.BaseURL, "/")
+	contextPath := strings.TrimSuffix(cfg.ContextPath, "/")
+
 	return &client{
-		baseURL:  strings.TrimSuffix(baseURL, "/"),
-		email:    email,
-		apiToken: apiToken,
+		siteURL:     siteURL,
+		contextPath: contextPath,
+		apiBase:     siteURL + contextPath + "/rest/api",
+		deployment:  deployment,
+		email:       cfg.Email,
+		apiToken:    cfg.APIToken,
+		token:       cfg.Token,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -44,17 +81,30 @@ func NewClient(baseURL, email, apiToken string) Client {
 	}
 }
 
+// setAuth applies the appropriate authentication scheme for the deployment.
+func (c *client) setAuth(req *http.Request) {
+	if c.deployment == model.DeploymentServer {
+		// Self-hosted uses Personal Access Tokens via Bearer auth.
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		return
+	}
+	// Cloud uses HTTP Basic auth with email + API token.
+	req.SetBasicAuth(c.email, c.apiToken)
+}
+
 // GetPage retrieves a Confluence page by ID
 func (c *client) GetPage(pageID string) (*model.ConfluencePage, error) {
 	// Build URL with expansions to get all needed data
-	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s", pageID)
+	endpoint := fmt.Sprintf("/content/%s", pageID)
 	params := url.Values{
 		"expand": []string{
 			"body.storage,metadata.labels,version,space,history,children.attachment",
 		},
 	}
 
-	fullURL := c.baseURL + endpoint + "?" + params.Encode()
+	fullURL := c.apiBase + endpoint + "?" + params.Encode()
 
 	resp, err := c.makeRequest("GET", fullURL, nil)
 	if err != nil {
@@ -83,7 +133,7 @@ const defaultChildPageLimit = 100
 
 // GetChildPages retrieves all child pages for a given page ID
 func (c *client) GetChildPages(pageID string) ([]*model.ConfluencePage, error) {
-	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s/child/page", pageID)
+	endpoint := fmt.Sprintf("/content/%s/child/page", pageID)
 	params := url.Values{
 		"expand": []string{"body.storage,metadata.labels,version,space,history"},
 		"limit":  []string{strconv.Itoa(defaultChildPageLimit)},
@@ -94,7 +144,7 @@ func (c *client) GetChildPages(pageID string) ([]*model.ConfluencePage, error) {
 
 	for {
 		params.Set("start", strconv.Itoa(start))
-		fullURL := c.baseURL + endpoint + "?" + params.Encode()
+		fullURL := c.apiBase + endpoint + "?" + params.Encode()
 
 		resp, err := c.makeRequest("GET", fullURL, nil)
 		if err != nil {
@@ -147,7 +197,7 @@ func (c *client) makeRequest(method, url string, body io.Reader) (*http.Response
 	}
 
 	// Set authentication
-	req.SetBasicAuth(c.email, c.apiToken)
+	c.setAuth(req)
 
 	// Set headers
 	req.Header.Set("Accept", "application/json")
@@ -220,7 +270,7 @@ func (c *client) fetchBinary(downloadURL string) (*http.Response, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.SetBasicAuth(c.email, c.apiToken)
+	c.setAuth(req)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", c.userAgent)
 
@@ -239,8 +289,8 @@ func (c *client) attachmentRESTDownloadURL(attachment *model.ConfluenceAttachmen
 		return "", false
 	}
 
-	return fmt.Sprintf("%s/wiki/rest/api/content/%s/child/attachment/%s/download",
-		c.baseURL, pageID, attachment.ID), true
+	return fmt.Sprintf("%s/content/%s/child/attachment/%s/download",
+		c.apiBase, pageID, attachment.ID), true
 }
 
 // pageIDFromDownloadLink extracts the parent page ID from a download link of the
@@ -268,19 +318,18 @@ func (c *client) normalizeDownloadLink(link string) (string, error) {
 		link = "/" + link
 	}
 
-	if strings.HasPrefix(link, "/download/") {
-		link = "/wiki" + link
-	}
-
-	if strings.HasPrefix(link, "download/") {
-		link = "/wiki/" + link
+	// Download links are relative to the instance context path ("/wiki" for
+	// Cloud, "" or e.g. "/confluence" for self-hosted). Prefix it unless the
+	// link already carries it.
+	if c.contextPath != "" && !strings.HasPrefix(link, c.contextPath+"/") {
+		link = c.contextPath + link
 	}
 
 	if strings.Contains(link, " ") {
 		link = strings.ReplaceAll(link, " ", "%20")
 	}
 
-	full := c.baseURL + link
+	full := c.siteURL + link
 	parsed, err := url.Parse(full)
 	if err != nil {
 		return "", fmt.Errorf("invalid attachment url %s: %w", full, err)
@@ -288,21 +337,27 @@ func (c *client) normalizeDownloadLink(link string) (string, error) {
 	return parsed.String(), nil
 }
 
-// GetUser retrieves user information by account ID
-func (c *client) GetUser(accountID string) (*model.ConfluenceUser, error) {
-	endpoint := fmt.Sprintf("/wiki/rest/api/user?accountId=%s", url.QueryEscape(accountID))
-	fullURL := c.baseURL + endpoint
+// GetUser retrieves user information by identifier. On Cloud the identifier is
+// an account ID; on self-hosted instances it is a user key.
+func (c *client) GetUser(userID string) (*model.ConfluenceUser, error) {
+	param := "accountId"
+	if c.deployment == model.DeploymentServer {
+		param = "key"
+	}
+
+	query := url.Values{param: []string{userID}}
+	fullURL := c.apiBase + "/user?" + query.Encode()
 
 	resp, err := c.makeRequest("GET", fullURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user %s: %w", accountID, err)
+		return nil, fmt.Errorf("failed to get user %s: %w", userID, err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp, fmt.Sprintf("get user %s", accountID))
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("get user %s", userID))
 	}
 
 	var user model.ConfluenceUser
@@ -311,6 +366,88 @@ func (c *client) GetUser(accountID string) (*model.ConfluenceUser, error) {
 	}
 
 	return &user, nil
+}
+
+// FindPageID resolves a page ID from its space key and title. This is primarily
+// used for self-hosted "pretty" URLs (e.g. /display/SPACE/Page+Title) that do
+// not embed the numeric page ID.
+func (c *client) FindPageID(spaceKey, title string) (string, error) {
+	if spaceKey == "" || title == "" {
+		return "", fmt.Errorf("both space key and title are required to look up a page ID")
+	}
+
+	query := url.Values{
+		"spaceKey": []string{spaceKey},
+		"title":    []string{title},
+		"limit":    []string{"1"},
+	}
+	fullURL := c.apiBase + "/content?" + query.Encode()
+
+	resp, err := c.makeRequest("GET", fullURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to look up page %q in space %q: %w", title, spaceKey, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", c.handleErrorResponse(resp, fmt.Sprintf("look up page %q in space %q", title, spaceKey))
+	}
+
+	var searchResult model.ConfluenceSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+		return "", fmt.Errorf("failed to decode page lookup response: %w", err)
+	}
+
+	if len(searchResult.Results) == 0 || searchResult.Results[0].ID == "" {
+		return "", fmt.Errorf("no page titled %q found in space %q", title, spaceKey)
+	}
+
+	return searchResult.Results[0].ID, nil
+}
+
+const defaultSearchLimit = 50
+
+// SearchByCQL runs a CQL query and returns the matching pages. It is used to
+// resolve dynamic list macros (e.g. contentbylabel) into concrete page links.
+func (c *client) SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error) {
+	if strings.TrimSpace(cql) == "" {
+		return nil, fmt.Errorf("cql query is required")
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+
+	query := url.Values{
+		"cql":    []string{cql},
+		"limit":  []string{strconv.Itoa(limit)},
+		"expand": []string{"space,version"},
+	}
+	fullURL := c.apiBase + "/content/search?" + query.Encode()
+
+	resp, err := c.makeRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run CQL search %q: %w", cql, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("run CQL search %q", cql))
+	}
+
+	var searchResult model.ConfluenceSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&searchResult); err != nil {
+		return nil, fmt.Errorf("failed to decode CQL search response: %w", err)
+	}
+
+	pages := make([]*model.ConfluencePage, 0, len(searchResult.Results))
+	for i := range searchResult.Results {
+		pages = append(pages, model.ConvertAPIPageToModel(&searchResult.Results[i]))
+	}
+	return pages, nil
 }
 
 // handleErrorResponse handles error responses from the API

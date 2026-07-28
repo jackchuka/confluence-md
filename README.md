@@ -11,7 +11,7 @@ A CLI tool to convert Confluence pages to Markdown format with a single command.
 - Convert single Confluence pages to Markdown
 - Convert entire page trees with hierarchical structure
 - Download and embed images from Confluence pages
-- Support for Confluence Cloud with API authentication
+- Works with both Confluence Cloud and self-hosted Server / Data Center instances
 - Enhanced support for Confluence-specific elements (user references, status badges, time elements)
 - Clean, readable Markdown output
 - Cross-platform support (Linux, macOS, Windows)
@@ -38,12 +38,23 @@ go install github.com/jackchuka/confluence-md/cmd/confluence-md@latest
 
 ### Authentication
 
-You'll need:
+The tool auto-detects whether a URL points to Confluence Cloud (`*.atlassian.net`)
+or a self-hosted Server / Data Center instance. You can force the mode with
+`--type cloud|server`.
 
-- Your Confluence email address
-- A Confluence API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens))
+**Confluence Cloud** — authenticates with your email + an API token:
+
+- Your Confluence email address (`--email`)
+- A Confluence API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens)), passed via `--api-token`
+
+**Self-hosted (Server / Data Center)** — authenticates with a Personal Access Token:
+
+- A [Personal Access Token](https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html) (Confluence 7.9+, including 9.x), passed via `--api-token`
+- No email is required
 
 ### Convert a Single Page
+
+Confluence Cloud:
 
 ```bash
 confluence-md page <page-url> --email your-email@example.com --api-token your-api-token
@@ -55,6 +66,21 @@ Example:
 confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title \
   --email john.doe@company.com \
   --api-token your-api-token-here
+```
+
+Self-hosted (Server / Data Center) with a Personal Access Token:
+
+```bash
+confluence-md page https://confluence.example.com/pages/viewpage.action?pageId=12345 \
+  --api-token your-personal-access-token
+```
+
+Self-hosted "pretty" URLs (`/display/SPACE/Page+Title`) are also supported — the
+page ID is resolved automatically from the space and title:
+
+```bash
+confluence-md page "https://confluence.example.com/display/SPACE/Page+Title" \
+  --api-token your-personal-access-token
 ```
 
 ### Convert a Page Tree
@@ -82,8 +108,9 @@ confluence-md html page.html
 
 ### Common Options
 
-- `--email, -e`: Your Confluence email address (**required**)
-- `--api-token, -t`: Your Confluence API token (**required**)
+- `--email, -e`: Your Confluence email address (**required for Cloud**)
+- `--api-token, -t`: Your Confluence API token (Cloud) or Personal Access Token (self-hosted) (**required**)
+- `--type`: Deployment type, `cloud` or `server` (default: auto-detect from the URL host)
 - `--output, -o`: Output directory (default: current directory)
 - `--output-name-template`: Go template for the markdown filename (see below)
 - `--download-images`: Download images from Confluence (default: true)
@@ -107,6 +134,13 @@ confluence-md page <page-url> --email user@example.com --api-token token --downl
 
 # Convert entire page tree
 confluence-md tree <page-url> --email user@example.com --api-token token --output ./wiki
+
+# Convert a self-hosted (Server / Data Center) page tree with a Personal Access Token
+confluence-md tree https://confluence.example.com/pages/viewpage.action?pageId=12345 \
+  --api-token your-personal-access-token --output ./wiki
+
+# Force the deployment type when the host isn't a *.atlassian.net address
+confluence-md page <page-url> --api-token token --type server
 ```
 
 ### Output name templates

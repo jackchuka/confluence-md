@@ -1,12 +1,14 @@
 package converter
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	mock_confluence "github.com/jackchuka/confluence-md/internal/confluence/mock"
 	confModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	convModel "github.com/jackchuka/confluence-md/internal/converter/model"
 	mock_attachments "github.com/jackchuka/confluence-md/internal/converter/plugin/attachments/mock"
@@ -54,7 +56,8 @@ func TestConverterConvertPage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doc, err := conv.ConvertPage(tt.page, "https://example.atlassian.net", ".")
+			site := confModel.SiteInfo{BaseURL: "https://example.atlassian.net", Deployment: confModel.DeploymentCloud, ContextPath: "/wiki"}
+			doc, err := conv.ConvertPage(tt.page, site, ".")
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
@@ -75,6 +78,51 @@ func TestConverterConvertPage(t *testing.T) {
 				t.Fatalf("expected markdown content, got %q", doc.Content)
 			}
 		})
+	}
+}
+
+func TestConverterConvertPageLinks(t *testing.T) {
+	conv := NewConverter(nil)
+
+	page := &confModel.ConfluencePage{
+		ID:       "100",
+		Title:    "Source Page",
+		SpaceKey: "MKT",
+		Version:  1,
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
+				// 1) title-only page link (same space, no body) — used to vanish
+				// 2) page link with an explicit link body
+				// 3) cross-space page link
+				Value: `<p>viz <ac:link><ri:page ri:content-title="UC0075 - Notifikace" /></ac:link>.</p>` +
+					`<p>detail <ac:link><ri:page ri:content-title="EN0012 - Administrátor" /><ac:link-body>Administrátor</ac:link-body></ac:link>.</p>` +
+					`<p>jinde <ac:link><ri:page ri:content-title="Portál EDC" ri:space-key="OPS" /></ac:link>.</p>`,
+			},
+		},
+	}
+	page.Content.Storage.Representation = "storage"
+
+	site := confModel.SiteInfo{BaseURL: "https://dory.eon.cz", Deployment: confModel.DeploymentServer, ContextPath: ""}
+	doc, err := conv.ConvertPage(page, site, ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wants := []string{
+		// title-only link resolves to text + pretty display URL (no longer "viz .")
+		"[UC0075 - Notifikace](https://dory.eon.cz/display/MKT/UC0075+-+Notifikace)",
+		// explicit body wins as the link text; falls back to current page's space
+		"[Administrátor](https://dory.eon.cz/display/MKT/EN0012+-+Administr%C3%A1tor)",
+		// explicit space key is honored
+		"[Portál EDC](https://dory.eon.cz/display/OPS/Port%C3%A1l+EDC)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(doc.Content, want) {
+			t.Errorf("expected markdown to contain %q\n got: %s", want, doc.Content)
+		}
+	}
+	if strings.Contains(doc.Content, "viz .") {
+		t.Errorf("page link was dropped (found \"viz .\"): %s", doc.Content)
 	}
 }
 
@@ -121,6 +169,220 @@ func TestConverterDownloadImages(t *testing.T) {
 	}
 	if doc.Images[0].Size != int64(len(data)) {
 		t.Fatalf("expected size %d, got %d", len(data), doc.Images[0].Size)
+	}
+}
+
+func TestConverterViewFileMacro(t *testing.T) {
+	pdf := []byte("%PDF-1.7 fake bytes")
+	attachment := &confModel.ConfluenceAttachment{Title: "Plna_moc.pdf", MediaType: "application/pdf", FileSize: int64(len(pdf))}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "Plna_moc.pdf", 0).Return(attachment, pdf, nil)
+
+	conv := NewConverter(nil, WithDownloadAttachments("assets"))
+	conv.attachments = mockResolver
+
+	page := &confModel.ConfluencePage{
+		ID:       "100",
+		Title:    "TMPL001 v01 - Plná Moc",
+		SpaceKey: "MKT",
+		Version:  1,
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
+				Value: `<p>Soubor:</p><ac:structured-macro ac:name="view-file" ac:schema-version="1">` +
+					`<ac:parameter ac:name="name"><ri:attachment ri:filename="Plna_moc.pdf" /></ac:parameter>` +
+					`</ac:structured-macro>`,
+			},
+		},
+		Attachments: []confModel.ConfluenceAttachment{{
+			ID:           "att1",
+			Title:        "Plna_moc.pdf",
+			MediaType:    "application/pdf",
+			FileSize:     int64(len(pdf)),
+			DownloadLink: "/download/attachments/100/Plna_moc.pdf",
+		}},
+	}
+	page.Content.Storage.Representation = "storage"
+
+	site := confModel.SiteInfo{BaseURL: "https://dory.eon.cz", Deployment: confModel.DeploymentServer}
+	tmpDir := t.TempDir()
+	doc, err := conv.ConvertPage(page, site, tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The macro must become a markdown link to the local file (not an "Unsupported macro" comment).
+	wantLink := "[Plna_moc.pdf](assets%2FPlna_moc.pdf)"
+	if !strings.Contains(doc.Content, wantLink) {
+		t.Errorf("expected link %q, got: %s", wantLink, doc.Content)
+	}
+	if strings.Contains(doc.Content, "Unsupported macro") {
+		t.Errorf("view-file macro left unsupported: %s", doc.Content)
+	}
+
+	// The attachment must have been downloaded to disk.
+	got, err := os.ReadFile(filepath.Join(tmpDir, "assets", "Plna_moc.pdf"))
+	if err != nil {
+		t.Fatalf("expected downloaded file: %v", err)
+	}
+	if string(got) != string(pdf) {
+		t.Errorf("unexpected file content: %q", string(got))
+	}
+}
+
+func TestConverterContentByLabelAndJiraMacros(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mock_confluence.NewMockClient(ctrl)
+	// user cache lookups during SetCurrentPage may call GetUser; allow any.
+	mockClient.EXPECT().GetUser(gomock.Any()).Return(nil, fmt.Errorf("n/a")).AnyTimes()
+	mockClient.EXPECT().
+		SearchByCQL(`label = "ep0006" and ancestor = "194514542"`, 100).
+		Return([]*confModel.ConfluencePage{
+			{ID: "1", Title: "US0010 - Import CSV", SpaceKey: "MKT"},
+			{ID: "2", Title: "US0011 - Kontrola dat", SpaceKey: "MKT"},
+		}, nil)
+
+	conv := NewConverter(mockClient)
+
+	page := &confModel.ConfluencePage{
+		ID:       "100",
+		Title:    "EP0006 - Manuální import",
+		SpaceKey: "MKT",
+		Version:  1,
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
+				Value: `<p><ac:structured-macro ac:name="jira"><ac:parameter ac:name="key">MAR-42</ac:parameter></ac:structured-macro></p>` +
+					`<h1>Související User Stories</h1>` +
+					`<ac:structured-macro ac:name="contentbylabel"><ac:parameter ac:name="cql">label = "ep0006" and ancestor = "194514542"</ac:parameter></ac:structured-macro>`,
+			},
+		},
+	}
+	page.Content.Storage.Representation = "storage"
+
+	site := confModel.SiteInfo{BaseURL: "https://dory.eon.cz", Deployment: confModel.DeploymentServer}
+	doc, err := conv.ConvertPage(page, site, ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wants := []string{
+		"MAR-42",
+		"- [US0010 - Import CSV](https://dory.eon.cz/display/MKT/US0010+-+Import+CSV)",
+		"- [US0011 - Kontrola dat](https://dory.eon.cz/display/MKT/US0011+-+Kontrola+dat)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(doc.Content, want) {
+			t.Errorf("expected %q in output\n got: %s", want, doc.Content)
+		}
+	}
+	if strings.Contains(doc.Content, "Unsupported macro") {
+		t.Errorf("a macro was left unsupported: %s", doc.Content)
+	}
+}
+
+func TestConverterChildrenMacro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mock_confluence.NewMockClient(ctrl)
+	mockClient.EXPECT().GetUser(gomock.Any()).Return(nil, fmt.Errorf("n/a")).AnyTimes()
+	mockClient.EXPECT().GetChildPages("100").Return([]*confModel.ConfluencePage{
+		{ID: "2", Title: "Portál EDC", SpaceKey: "MKT"},
+		{ID: "3", Title: "Dodavatel MamaAI", SpaceKey: "MKT"},
+	}, nil)
+
+	conv := NewConverter(mockClient)
+
+	page := &confModel.ConfluencePage{
+		ID:       "100",
+		Title:    "Externí komponenty systému",
+		SpaceKey: "MKT",
+		Version:  1,
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
+				Value: `<ac:structured-macro ac:name="children"></ac:structured-macro><p>WIP architektura</p>`,
+			},
+		},
+	}
+	page.Content.Storage.Representation = "storage"
+
+	site := confModel.SiteInfo{BaseURL: "https://dory.eon.cz", Deployment: confModel.DeploymentServer}
+	doc, err := conv.ConvertPage(page, site, ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wants := []string{
+		"<!-- Child Pages -->",
+		"- [Portál EDC](https://dory.eon.cz/display/MKT/Port%C3%A1l+EDC)",
+		"- [Dodavatel MamaAI](https://dory.eon.cz/display/MKT/Dodavatel+MamaAI)",
+		"<!-- /Child Pages -->",
+		"WIP architektura",
+	}
+	for _, want := range wants {
+		if !strings.Contains(doc.Content, want) {
+			t.Errorf("expected %q in output\n got: %s", want, doc.Content)
+		}
+	}
+}
+
+func TestConverterMarkdownMacro(t *testing.T) {
+	conv := NewConverter(nil)
+
+	page := &confModel.ConfluencePage{
+		ID:       "100",
+		Title:    "Navržené řešení",
+		SpaceKey: "MKT",
+		Version:  1,
+		Content: confModel.ConfluenceContent{
+			Storage: confModel.ContentStorage{
+				Value: `<p>Úvod.</p>` +
+					`<ac:structured-macro ac:name="markdown" ac:schema-version="1">` +
+					`<ac:plain-text-body><![CDATA[## Marginální skóre
+
+Vzorec: ` + "`score = a & b`" + ` kde ` + "`a < b`" + `
+
+- první bod
+- druhý bod
+
+| Sloupec | Hodnota |
+|---|---|
+| x | 1 |
+]]></ac:plain-text-body></ac:structured-macro>`,
+			},
+		},
+	}
+	page.Content.Storage.Representation = "storage"
+
+	site := confModel.SiteInfo{BaseURL: "https://dory.eon.cz", Deployment: confModel.DeploymentServer}
+	doc, err := conv.ConvertPage(page, site, ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The macro body is already Markdown: it must survive verbatim, not be
+	// fenced as code, escaped, or dropped.
+	wants := []string{
+		"## Marginální skóre",
+		"- první bod",
+		"| Sloupec | Hodnota |",
+		"`score = a & b`", // entities decoded back
+		"`a < b`",
+	}
+	for _, want := range wants {
+		if !strings.Contains(doc.Content, want) {
+			t.Errorf("expected %q in output\n got: %s", want, doc.Content)
+		}
+	}
+	if strings.Contains(doc.Content, "Unsupported macro") {
+		t.Errorf("markdown macro left unsupported: %s", doc.Content)
+	}
+	if strings.Contains(doc.Content, "```") {
+		t.Errorf("markdown body must not be fenced as code: %s", doc.Content)
 	}
 }
 

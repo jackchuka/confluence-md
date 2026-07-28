@@ -99,6 +99,28 @@ func TestHandleEmoticon(t *testing.T) {
 	}
 }
 
+func TestHandleEmoticonNameMapping(t *testing.T) {
+	cases := map[string]string{
+		`<ac:emoticon ac:name="tick"></ac:emoticon>`:        "✔️ ",
+		`<ac:emoticon ac:name="minus"></ac:emoticon>`:       "➖ ",
+		`<ac:emoticon ac:name="minus sign"></ac:emoticon>`:  "➖ ",
+		`<ac:emoticon ac:name="information"></ac:emoticon>`: "ℹ️ ",
+		// unknown name falls back to the :name: token
+		`<ac:emoticon ac:name="totally-unknown"></ac:emoticon>`: ":totally-unknown:",
+		// explicit fallback glyph still wins over the name map
+		`<ac:emoticon ac:name="tick" ac:emoji-fallback="✅"></ac:emoticon>`: "✅ ",
+	}
+	for input, want := range cases {
+		plugin := &ConfluencePlugin{}
+		node := findNode(t, input, "ac:emoticon")
+		var out strings.Builder
+		plugin.handleEmoticon(nil, &out, node)
+		if out.String() != want {
+			t.Errorf("input %q: got %q, want %q", input, out.String(), want)
+		}
+	}
+}
+
 func TestHandleTocMacro(t *testing.T) {
 	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:structured-macro ac:name="toc" />`, "ac:structured-macro")

@@ -6,6 +6,16 @@ import (
 	"strings"
 )
 
+// firstNonEmpty returns the first non-empty string from the given values.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ParseConfluenceImage extracts filename from Confluence ac:image elements
 func ParseConfluenceImage(html string) string {
 	filenameRegex := regexp.MustCompile(`ri:filename="([^"]+)"`)

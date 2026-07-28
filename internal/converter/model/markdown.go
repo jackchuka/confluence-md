@@ -13,6 +13,7 @@ type MarkdownDocument struct {
 	Frontmatter Frontmatter `yaml:",inline"`
 	Content     string      `yaml:"-"`
 	Images      []ImageRef  `yaml:"-"`
+	Files       []ImageRef  `yaml:"-"` // non-image attachments (view-file macros)
 }
 
 // Frontmatter represents YAML frontmatter for the Markdown document
@@ -78,8 +79,8 @@ func (md *MarkdownDocument) WithFrontmatter() (string, error) {
 }
 
 // NewMarkdownDocument creates a new MarkdownDocument from a ConfluencePage
-func NewMarkdownDocument(page *model.ConfluencePage, baseURL string) (*MarkdownDocument, error) {
-	pageURL, err := page.GetURL(baseURL)
+func NewMarkdownDocument(page *model.ConfluencePage, site model.SiteInfo) (*MarkdownDocument, error) {
+	pageURL, err := page.GetURL(site)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate page URL: %w", err)
 	}
@@ -99,6 +100,7 @@ func NewMarkdownDocument(page *model.ConfluencePage, baseURL string) (*MarkdownD
 		},
 		Content: "", // Will be filled by converter
 		Images:  []ImageRef{},
+		Files:   []ImageRef{},
 	}
 
 	return doc, nil
