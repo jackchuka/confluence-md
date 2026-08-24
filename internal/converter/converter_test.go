@@ -300,17 +300,18 @@ func TestConverterDownloadImagesContinuesPastFailure(t *testing.T) {
 }
 
 func TestConverterDownloadImagesSkipsOversizedImage(t *testing.T) {
+	// FileSize is deliberately left unset: the API omits extensions.fileSize for
+	// some attachments, so the limit has to be enforced on the bytes received.
 	huge := &confModel.ConfluenceAttachment{
 		Title:     "huge.png",
 		MediaType: "image/png",
-		FileSize:  maxImageSizeBytes + 1,
 	}
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockResolver := mock_attachments.NewMockResolver(ctrl)
 	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "huge.png", 0).
-		Return(huge, []byte("x"), nil)
+		Return(huge, make([]byte, maxImageSizeBytes+1), nil)
 
 	conv := &Converter{imageFolder: "images", attachments: mockResolver}
 	doc := &convModel.MarkdownDocument{Images: []convModel.ImageRef{{FileName: "huge.png"}}}

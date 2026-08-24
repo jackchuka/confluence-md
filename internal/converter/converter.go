@@ -152,12 +152,14 @@ func (c *Converter) downloadImage(imageRef *model.ImageRef, page *confluenceMode
 		return err
 	}
 
-	if attachment.FileSize > maxImageSizeBytes {
-		return fmt.Errorf("too large: %d bytes (max %d)", attachment.FileSize, maxImageSizeBytes)
+	// Check the bytes on hand rather than extensions.fileSize, which is absent
+	// (and so reads as 0) for some attachments.
+	if size := int64(len(data)); size > maxImageSizeBytes {
+		return fmt.Errorf("too large: %d bytes (max %d)", size, maxImageSizeBytes)
 	}
 
 	imageRef.ContentType = attachment.MediaType
-	imageRef.Size = attachment.FileSize
+	imageRef.Size = int64(len(data))
 
 	filePath := filepath.Join(outputDir, c.imageFolder, imageRef.FileName)
 	fmt.Println("Downloading image:", imageRef.FileName, "to", filePath)
