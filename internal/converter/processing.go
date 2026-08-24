@@ -38,11 +38,16 @@ func (c *Converter) extractImageReferences(html, pageID, baseURL string) []model
 	acImageRegex := regexp.MustCompile(`<ac:image[^>]*>[\s\S]*?</ac:image>`)
 	matches := acImageRegex.FindAllString(html, -1)
 
+	// A filename may be embedded several times on one page. Keep a single
+	// reference per file so it is downloaded — and counted — exactly once.
+	seen := make(map[string]bool, len(matches))
+
 	for _, imageHTML := range matches {
 		fileName := plugin.ParseConfluenceImage(imageHTML)
-		if fileName == "" {
+		if fileName == "" || seen[fileName] {
 			continue
 		}
+		seen[fileName] = true
 
 		encodedFilename := url.QueryEscape(fileName)
 		actualURL := fmt.Sprintf("%s/wiki/download/attachments/%s/%s",

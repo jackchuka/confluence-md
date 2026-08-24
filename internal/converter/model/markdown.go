@@ -13,6 +13,16 @@ type MarkdownDocument struct {
 	Frontmatter Frontmatter `yaml:",inline"`
 	Content     string      `yaml:"-"`
 	Images      []ImageRef  `yaml:"-"`
+	// ImageFailures records images that could not be fetched or written. These
+	// do not fail the page: the Markdown is kept with its links intact, so
+	// dropping the missing file into the image folder later repairs it.
+	ImageFailures []ImageFailure `yaml:"-"`
+}
+
+// ImageFailure records a single image that could not be downloaded.
+type ImageFailure struct {
+	FileName string
+	Err      error
 }
 
 // Frontmatter represents YAML frontmatter for the Markdown document
@@ -39,6 +49,7 @@ type ImageRef struct {
 	FileName    string `json:"fileName"`
 	ContentType string `json:"contentType"`
 	Size        int64  `json:"size"`
+	Downloaded  bool   `json:"downloaded"`
 }
 
 func (md *MarkdownDocument) WithFrontmatter() (string, error) {

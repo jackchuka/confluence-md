@@ -76,11 +76,44 @@ type ConfluenceSearchResult struct {
 	Size    int                 `json:"size"`
 }
 
-// ConfluenceErrorResponse represents an error response from the API
+// ConfluenceErrorResponse represents an error response from the API. Confluence
+// Cloud uses three shapes: the v1 {statusCode,message,reason}, an RFC 7807
+// {type,title,status,detail}, and the v2 {errors:[{status,code,title,detail}]}.
 type ConfluenceErrorResponse struct {
 	StatusCode int    `json:"statusCode"`
 	Message    string `json:"message"`
 	Reason     string `json:"reason"`
+	Status     int    `json:"status"`
+	Title      string `json:"title"`
+	Detail     string `json:"detail"`
+	Errors     []struct {
+		Status int    `json:"status"`
+		Code   string `json:"code"`
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+	} `json:"errors"`
+}
+
+// Describe returns the most specific human-readable message the response
+// carries, or "" if it carries none. Callers must treat "" as "no usable
+// message" and fall back to the HTTP status: a body in a shape we do not model
+// still unmarshals cleanly, leaving every field zero.
+func (e ConfluenceErrorResponse) Describe() string {
+	for _, s := range []string{e.Message, e.Detail, e.Title, e.Reason} {
+		if s != "" {
+			return s
+		}
+	}
+
+	for _, err := range e.Errors {
+		for _, s := range []string{err.Detail, err.Title, err.Code} {
+			if s != "" {
+				return s
+			}
+		}
+	}
+
+	return ""
 }
 
 // ConfluenceUser represents a Confluence user from the API

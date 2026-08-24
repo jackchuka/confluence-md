@@ -81,6 +81,9 @@ func (c *client) GetPage(pageID string) (*model.ConfluencePage, error) {
 
 const defaultChildPageLimit = 100
 
+// maxErrorBodyChars caps how much of an unrecognized error body is echoed back.
+const maxErrorBodyChars = 256
+
 // GetChildPages retrieves all child pages for a given page ID
 func (c *client) GetChildPages(pageID string) ([]*model.ConfluencePage, error) {
 	endpoint := fmt.Sprintf("/wiki/rest/api/content/%s/child/page", pageID)
@@ -179,38 +182,45 @@ func (c *client) DownloadAttachmentContent(attachment *model.ConfluenceAttachmen
 	// Some Confluence Cloud sites reject API-token auth on the legacy
 	// /wiki/download/ media path (responding 401 with www-authenticate: OAuth).
 	// The v1 REST attachment endpoint honors token auth, so try it as a fallback.
-	if fallbackURL, ok := c.attachmentRESTDownloadURL(attachment); ok {
+	// A v2-form download link already normalizes to that same REST URL, so drop
+	// the duplicate instead of sending an identical request twice.
+	if fallbackURL, ok := c.attachmentRESTDownloadURL(attachment); ok && fallbackURL != downloadURL {
 		urls = append(urls, fallbackURL)
 	}
 
-	var lastResp *http.Response
+	var lastErr error
 	for _, u := range urls {
-		resp, err := c.fetchBinary(u)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download attachment %s: %w", attachment.Title, err)
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			defer func() {
-				_ = resp.Body.Close()
-			}()
-			data, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read attachment content: %w", err)
-			}
+		data, err := c.fetchAttachmentFrom(u, attachment.Title)
+		if err == nil {
 			return data, nil
 		}
-
-		if lastResp != nil {
-			_ = lastResp.Body.Close()
-		}
-		lastResp = resp
+		lastErr = err
 	}
 
+	return nil, lastErr
+}
+
+// fetchAttachmentFrom performs one download attempt, closing the response body
+// on every path so a failed attempt does not strand the connection.
+func (c *client) fetchAttachmentFrom(downloadURL, title string) ([]byte, error) {
+	resp, err := c.fetchBinary(downloadURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download attachment %s: %w", title, err)
+	}
 	defer func() {
-		_ = lastResp.Body.Close()
+		_ = resp.Body.Close()
 	}()
-	return nil, c.handleErrorResponse(lastResp, fmt.Sprintf("download attachment %s", attachment.Title))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp, fmt.Sprintf("download attachment %s", title))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read attachment content: %w", err)
+	}
+
+	return data, nil
 }
 
 // fetchBinary issues an authenticated GET for raw attachment bytes.
@@ -243,20 +253,26 @@ func (c *client) attachmentRESTDownloadURL(attachment *model.ConfluenceAttachmen
 		c.baseURL, pageID, attachment.ID), true
 }
 
-// pageIDFromDownloadLink extracts the parent page ID from a download link of the
-// form /download/attachments/{pageID}/{filename}?...
+// pageIDFromDownloadLink extracts the parent page ID from a download link, in
+// either the legacy /download/attachments/{pageID}/{filename}?... form or the
+// /rest/api/content/{pageID}/child/attachment/{attachmentID}/download form
+// returned by the v2 attachments API.
 func pageIDFromDownloadLink(link string) (string, bool) {
-	_, rest, found := strings.Cut(link, "/attachments/")
-	if !found {
-		return "", false
+	for _, sep := range []string{"/attachments/", "/content/"} {
+		_, rest, found := strings.Cut(link, sep)
+		if !found {
+			continue
+		}
+
+		pageID, _, found := strings.Cut(rest, "/")
+		if !found || pageID == "" {
+			continue
+		}
+
+		return pageID, true
 	}
 
-	pageID, _, found := strings.Cut(rest, "/")
-	if !found || pageID == "" {
-		return "", false
-	}
-
-	return pageID, true
+	return "", false
 }
 
 func (c *client) normalizeDownloadLink(link string) (string, error) {
@@ -268,12 +284,12 @@ func (c *client) normalizeDownloadLink(link string) (string, error) {
 		link = "/" + link
 	}
 
-	if strings.HasPrefix(link, "/download/") {
+	// Attachment download links are relative to the Confluence context path, not
+	// to the site root. Both the legacy /download/... media path and the
+	// /rest/api/... form returned by the v2 attachments API need /wiki prefixed;
+	// without it the request lands outside Confluence and 404s.
+	if !strings.HasPrefix(link, "/wiki/") {
 		link = "/wiki" + link
-	}
-
-	if strings.HasPrefix(link, "download/") {
-		link = "/wiki/" + link
 	}
 
 	if strings.Contains(link, " ") {
@@ -320,12 +336,29 @@ func (c *client) handleErrorResponse(resp *http.Response, operation string) erro
 		return fmt.Errorf("failed to %s: HTTP %d", operation, resp.StatusCode)
 	}
 
-	// Try to parse error response
+	// Try to parse error response. A body in an unmodelled shape still
+	// unmarshals cleanly with every field zero, so require a non-empty message
+	// before trusting it — otherwise the error reads "failed to X: " and says
+	// nothing at all.
 	var errorResp model.ConfluenceErrorResponse
 	if err := json.Unmarshal(bodyBytes, &errorResp); err == nil {
-		return fmt.Errorf("failed to %s: %s", operation, errorResp.Message)
+		if msg := errorResp.Describe(); msg != "" {
+			return fmt.Errorf("failed to %s: HTTP %d - %s", operation, resp.StatusCode, msg)
+		}
 	}
 
 	// Fallback to HTTP status
-	return fmt.Errorf("failed to %s: HTTP %d - %s", operation, resp.StatusCode, string(bodyBytes))
+	return fmt.Errorf("failed to %s: HTTP %d - %s", operation, resp.StatusCode, summarizeErrorBody(bodyBytes))
+}
+
+// summarizeErrorBody trims an unmodelled error body down to something printable.
+// A 401 on the media path answers with a full HTML login page, and image
+// failures are reported one line each.
+func summarizeErrorBody(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if len(text) <= maxErrorBodyChars {
+		return text
+	}
+
+	return text[:maxErrorBodyChars] + "... (truncated)"
 }

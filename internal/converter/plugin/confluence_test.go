@@ -74,14 +74,62 @@ func TestGetCellHTMLContent(t *testing.T) {
 }
 
 func TestHandleImage(t *testing.T) {
-	plugin := &ConfluencePlugin{imageFolder: "images"}
+	// Only the segments are escaped: escaping the whole path would emit
+	// "images%2Fdiagram.png", which no renderer resolves to images/diagram.png.
+	tests := []struct {
+		name        string
+		imageFolder string
+		filename    string
+		want        string
+	}{
+		{
+			name:        "separator is preserved",
+			imageFolder: "images",
+			filename:    "diagram.png",
+			want:        "![diagram.png](images/diagram.png)",
+		},
+		{
+			name:        "nested folder",
+			imageFolder: "docs/images",
+			filename:    "diagram.png",
+			want:        "![diagram.png](docs/images/diagram.png)",
+		},
+		{
+			name:        "unsafe characters in the filename are escaped",
+			imageFolder: "images",
+			filename:    "my diagram.png",
+			want:        "![my diagram.png](images/my%20diagram.png)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &ConfluencePlugin{imageFolder: tt.imageFolder}
+			node := findNode(t, `<ac:image ri:filename="`+tt.filename+`"></ac:image>`, "ac:image")
+			var out strings.Builder
+			status := plugin.handleImage(nil, &out, node)
+			if status != convpkg.RenderSuccess {
+				t.Fatalf("expected render success, got %v", status)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("got %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleImageWithoutImageFolder(t *testing.T) {
+	// imageFolder is empty when attachment downloading is off. The link must be
+	// the bare filename, not a root-relative "/diagram.png" — which renders as
+	// the escaped, unresolvable "%2Fdiagram.png".
+	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:image ri:filename="diagram.png"></ac:image>`, "ac:image")
 	var out strings.Builder
 	status := plugin.handleImage(nil, &out, node)
 	if status != convpkg.RenderSuccess {
 		t.Fatalf("expected render success, got %v", status)
 	}
-	if out.String() != "![diagram.png](images%2Fdiagram.png)" {
+	if out.String() != "![diagram.png](diagram.png)" {
 		t.Fatalf("unexpected markdown: %q", out.String())
 	}
 }

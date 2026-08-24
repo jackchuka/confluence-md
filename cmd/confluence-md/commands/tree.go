@@ -160,6 +160,10 @@ func performTreeConversion(client confluence.Client, baseURL, rootPageID string,
 		fmt.Printf("  Failed: %d pages\n", results.Failed)
 		fmt.Printf("  See error details above\n")
 	}
+	if results.ImageFailures > 0 {
+		fmt.Printf("  Images failed: %d across %d pages (pages kept their links)\n",
+			results.ImageFailures, results.PagesWithImageFailures)
+	}
 	fmt.Printf("  Output: %s\n", opts.OutputDir)
 
 	if err != nil {
@@ -191,7 +195,11 @@ type TreeStats struct {
 type ConversionResults struct {
 	Success int
 	Failed  int
-	Errors  []error
+	// PagesWithImageFailures counts pages that converted but lost at least one
+	// image, so a long run does not bury the warnings in scrollback.
+	PagesWithImageFailures int
+	ImageFailures          int
+	Errors                 []error
 }
 
 func fetchPageTree(client confluence.Client, pageID string, maxDepth int, currentDepth int, excludePatterns []string) (*PageNode, error) {
@@ -350,6 +358,10 @@ func convertPageTree(client confluence.Client, node *PageNode, outputDir string,
 
 	if result.Success {
 		results.Success++
+		if n := len(result.ImageFailures); n > 0 {
+			results.PagesWithImageFailures++
+			results.ImageFailures += n
+		}
 	} else {
 		results.Failed++
 		results.Errors = append(results.Errors, result.Error)
