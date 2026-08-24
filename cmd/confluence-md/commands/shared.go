@@ -10,6 +10,7 @@ import (
 	"github.com/jackchuka/confluence-md/internal/confluence"
 	confluenceModel "github.com/jackchuka/confluence-md/internal/confluence/model"
 	"github.com/jackchuka/confluence-md/internal/converter"
+	converterModel "github.com/jackchuka/confluence-md/internal/converter/model"
 )
 
 // sanitizeFileName uses the mature gosimple/slug library for robust filename sanitization
@@ -42,12 +43,14 @@ func buildOutputNamer(template string) (converter.OutputNamer, error) {
 
 // PageConversionResult represents the result of converting a single page
 type PageConversionResult struct {
-	OutputPath  string
-	PageID      string
-	Title       string
-	ImagesCount int
-	Success     bool
-	Error       error
+	OutputPath string
+	PageID     string
+	Title      string
+	// ImagesCount counts images actually written to disk, not references found.
+	ImagesCount   int
+	ImageFailures []converterModel.ImageFailure
+	Success       bool
+	Error         error
 }
 
 // convertSinglePage handles the full conversion pipeline for a single page
@@ -83,7 +86,12 @@ func convertSinglePageWithPath(client confluence.Client, page *confluenceModel.C
 		result.Error = fmt.Errorf("failed to convert page: %w", err)
 		return result
 	}
-	result.ImagesCount = len(doc.Images)
+	for _, img := range doc.Images {
+		if img.Downloaded {
+			result.ImagesCount++
+		}
+	}
+	result.ImageFailures = doc.ImageFailures
 
 	if err := converter.SaveMarkdownDocument(doc, outputPath, opts.IncludeMetadata); err != nil {
 		result.Error = fmt.Errorf("failed to save document: %w", err)
@@ -102,6 +110,13 @@ func printConversionResult(result *PageConversionResult) {
 		fmt.Printf("   Title: %s\n", result.Title)
 		if result.ImagesCount > 0 {
 			fmt.Printf("   📥 Images downloaded: %d\n", result.ImagesCount)
+		}
+		if len(result.ImageFailures) > 0 {
+			fmt.Printf("   ⚠️  Images failed: %d (the page kept its links; supply the files to repair it)\n",
+				len(result.ImageFailures))
+			for _, f := range result.ImageFailures {
+				fmt.Printf("      - %s: %v\n", f.FileName, f.Err)
+			}
 		}
 	} else {
 		fmt.Printf("❌ Failed to convert page: %s\n", result.Title)

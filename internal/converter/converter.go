@@ -127,29 +127,46 @@ func (c *Converter) downloadImages(doc *model.MarkdownDocument, page *confluence
 		return fmt.Errorf("page context is required to download images")
 	}
 
+	// An unreachable or unwritable image must not cost the caller the page. Each
+	// failure is recorded on the document and the loop continues; the Markdown
+	// keeps its link, so supplying the file later is enough to repair it.
 	for i := range doc.Images {
 		imageRef := &doc.Images[i]
-		attachment, data, err := c.attachments.DownloadAttachment(page, imageRef.FileName, 0)
-		if err != nil {
-			return fmt.Errorf("failed to download image %s: %w", imageRef.FileName, err)
+		if err := c.downloadImage(imageRef, page, outputDir); err != nil {
+			doc.ImageFailures = append(doc.ImageFailures, model.ImageFailure{
+				FileName: imageRef.FileName,
+				Err:      err,
+			})
+			continue
 		}
+		imageRef.Downloaded = true
+	}
 
-		if attachment.FileSize > maxImageSizeBytes {
-			return fmt.Errorf("image %s too large: %d bytes (max %d)", imageRef.FileName, attachment.FileSize, maxImageSizeBytes)
-		}
+	return nil
+}
 
-		imageRef.ContentType = attachment.MediaType
-		imageRef.Size = attachment.FileSize
+// downloadImage fetches a single image and writes it into the image folder.
+func (c *Converter) downloadImage(imageRef *model.ImageRef, page *confluenceModel.ConfluencePage, outputDir string) error {
+	attachment, data, err := c.attachments.DownloadAttachment(page, imageRef.FileName, 0)
+	if err != nil {
+		return err
+	}
 
-		filePath := filepath.Join(outputDir, c.imageFolder, imageRef.FileName)
-		fmt.Println("Downloading image:", imageRef.FileName, "to", filePath)
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return fmt.Errorf("failed to create image directory: %w", err)
-		}
+	if attachment.FileSize > maxImageSizeBytes {
+		return fmt.Errorf("too large: %d bytes (max %d)", attachment.FileSize, maxImageSizeBytes)
+	}
 
-		if err := os.WriteFile(filePath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write image %s: %w", imageRef.FileName, err)
-		}
+	imageRef.ContentType = attachment.MediaType
+	imageRef.Size = attachment.FileSize
+
+	filePath := filepath.Join(outputDir, c.imageFolder, imageRef.FileName)
+	fmt.Println("Downloading image:", imageRef.FileName, "to", filePath)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return fmt.Errorf("failed to create image directory: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write image: %w", err)
 	}
 
 	return nil

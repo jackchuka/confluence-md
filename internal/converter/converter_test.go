@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,5 +241,84 @@ func TestFixNestedListSpacing(t *testing.T) {
 	want := "\n- Item\n  - Nested\n    - Deep"
 	if got := fixNestedListSpacing(input); got != want {
 		t.Fatalf("fixNestedListSpacing(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestConverterDownloadImagesContinuesPastFailure(t *testing.T) {
+	// A single unreachable image must not cost the caller the whole page: the
+	// remaining images are still fetched and the failure is reported, not fatal.
+	data := []byte("image-bytes")
+	ok := &confModel.ConfluenceAttachment{Title: "good.png", MediaType: "image/png", FileSize: int64(len(data))}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "missing.png", 0).
+		Return(nil, nil, errors.New("attachment not found"))
+	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "good.png", 0).
+		Return(ok, data, nil)
+
+	conv := &Converter{imageFolder: "images", attachments: mockResolver}
+	doc := &convModel.MarkdownDocument{
+		Images: []convModel.ImageRef{
+			{FileName: "missing.png"},
+			{FileName: "good.png"},
+		},
+	}
+	page := &confModel.ConfluencePage{}
+	tmpDir := t.TempDir()
+
+	if err := conv.downloadImages(doc, page, tmpDir); err != nil {
+		t.Fatalf("downloadImages returned error for a per-image failure: %v", err)
+	}
+
+	if len(doc.ImageFailures) != 1 {
+		t.Fatalf("expected 1 recorded failure, got %d: %+v", len(doc.ImageFailures), doc.ImageFailures)
+	}
+	if doc.ImageFailures[0].FileName != "missing.png" {
+		t.Errorf("failure names %q, want missing.png", doc.ImageFailures[0].FileName)
+	}
+	if doc.ImageFailures[0].Err == nil {
+		t.Error("recorded failure carries no error")
+	}
+
+	if doc.Images[0].Downloaded {
+		t.Error("missing.png is marked downloaded")
+	}
+	if !doc.Images[1].Downloaded {
+		t.Error("good.png is not marked downloaded")
+	}
+
+	// The image after the failure must still be on disk.
+	got, err := os.ReadFile(filepath.Join(tmpDir, "images", "good.png"))
+	if err != nil {
+		t.Fatalf("image following the failure was not written: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("unexpected content: %q", got)
+	}
+}
+
+func TestConverterDownloadImagesSkipsOversizedImage(t *testing.T) {
+	huge := &confModel.ConfluenceAttachment{
+		Title:     "huge.png",
+		MediaType: "image/png",
+		FileSize:  maxImageSizeBytes + 1,
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockResolver := mock_attachments.NewMockResolver(ctrl)
+	mockResolver.EXPECT().DownloadAttachment(gomock.Any(), "huge.png", 0).
+		Return(huge, []byte("x"), nil)
+
+	conv := &Converter{imageFolder: "images", attachments: mockResolver}
+	doc := &convModel.MarkdownDocument{Images: []convModel.ImageRef{{FileName: "huge.png"}}}
+
+	if err := conv.downloadImages(doc, &confModel.ConfluencePage{}, t.TempDir()); err != nil {
+		t.Fatalf("downloadImages returned error for an oversized image: %v", err)
+	}
+	if len(doc.ImageFailures) != 1 {
+		t.Fatalf("expected the oversized image to be recorded as a failure, got %+v", doc.ImageFailures)
 	}
 }
