@@ -74,15 +74,47 @@ func TestGetCellHTMLContent(t *testing.T) {
 }
 
 func TestHandleImage(t *testing.T) {
-	plugin := &ConfluencePlugin{imageFolder: "images"}
-	node := findNode(t, `<ac:image ri:filename="diagram.png"></ac:image>`, "ac:image")
-	var out strings.Builder
-	status := plugin.handleImage(nil, &out, node)
-	if status != convpkg.RenderSuccess {
-		t.Fatalf("expected render success, got %v", status)
+	// Only the segments are escaped: escaping the whole path would emit
+	// "images%2Fdiagram.png", which no renderer resolves to images/diagram.png.
+	tests := []struct {
+		name        string
+		imageFolder string
+		filename    string
+		want        string
+	}{
+		{
+			name:        "separator is preserved",
+			imageFolder: "images",
+			filename:    "diagram.png",
+			want:        "![diagram.png](images/diagram.png)",
+		},
+		{
+			name:        "nested folder",
+			imageFolder: "docs/images",
+			filename:    "diagram.png",
+			want:        "![diagram.png](docs/images/diagram.png)",
+		},
+		{
+			name:        "unsafe characters in the filename are escaped",
+			imageFolder: "images",
+			filename:    "my diagram.png",
+			want:        "![my diagram.png](images/my%20diagram.png)",
+		},
 	}
-	if out.String() != "![diagram.png](images%2Fdiagram.png)" {
-		t.Fatalf("unexpected markdown: %q", out.String())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &ConfluencePlugin{imageFolder: tt.imageFolder}
+			node := findNode(t, `<ac:image ri:filename="`+tt.filename+`"></ac:image>`, "ac:image")
+			var out strings.Builder
+			status := plugin.handleImage(nil, &out, node)
+			if status != convpkg.RenderSuccess {
+				t.Fatalf("expected render success, got %v", status)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("got %q, want %q", out.String(), tt.want)
+			}
+		})
 	}
 }
 

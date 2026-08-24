@@ -523,17 +523,29 @@ func (p *ConfluencePlugin) handleImage(ctx converter.Context, w converter.Writer
 		return converter.RenderSuccess
 	}
 
-	// Build local path for the image. imageFolder is empty when attachment
-	// downloading is off, in which case the link is the bare filename — joining
-	// unconditionally would yield a root-relative "/name".
-	localPath := filename
-	if p.imageFolder != "" {
-		localPath = p.imageFolder + "/" + filename
-	}
-
-	_, _ = fmt.Fprintf(w, "![%s](%s)", filename, url.PathEscape(localPath))
+	// imageFolder is empty when attachment downloading is off, in which case the
+	// link is the bare filename — joining unconditionally would yield a
+	// root-relative "/name".
+	_, _ = fmt.Fprintf(w, "![%s](%s)", filename, escapeImagePath(p.imageFolder, filename))
 
 	return converter.RenderSuccess
+}
+
+// escapeImagePath joins path parts and percent-escapes each segment
+// individually. url.PathEscape over the whole path would encode the separator
+// itself, leaving a link like "assets%2Fname.png" that no renderer resolves.
+func escapeImagePath(parts ...string) string {
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		for _, segment := range strings.Split(part, "/") {
+			if segment == "" {
+				continue
+			}
+			escaped = append(escaped, url.PathEscape(segment))
+		}
+	}
+
+	return strings.Join(escaped, "/")
 }
 
 func (p *ConfluencePlugin) handleEmoticon(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
