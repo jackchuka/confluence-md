@@ -55,6 +55,21 @@ func (mr *MockClientMockRecorder) DownloadAttachmentContent(attachment any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DownloadAttachmentContent", reflect.TypeOf((*MockClient)(nil).DownloadAttachmentContent), attachment)
 }
 
+// FindPageID mocks base method.
+func (m *MockClient) FindPageID(spaceKey, title string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPageID", spaceKey, title)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPageID indicates an expected call of FindPageID.
+func (mr *MockClientMockRecorder) FindPageID(spaceKey, title any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPageID", reflect.TypeOf((*MockClient)(nil).FindPageID), spaceKey, title)
+}
+
 // GetChildPages mocks base method.
 func (m *MockClient) GetChildPages(pageID string) ([]*model.ConfluencePage, error) {
 	m.ctrl.T.Helper()
@@ -83,4 +98,34 @@ func (m *MockClient) GetPage(pageID string) (*model.ConfluencePage, error) {
 func (mr *MockClientMockRecorder) GetPage(pageID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPage", reflect.TypeOf((*MockClient)(nil).GetPage), pageID)
+}
+
+// GetUser mocks base method.
+func (m *MockClient) GetUser(userID string) (*model.ConfluenceUser, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUser", userID)
+	ret0, _ := ret[0].(*model.ConfluenceUser)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUser indicates an expected call of GetUser.
+func (mr *MockClientMockRecorder) GetUser(userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUser", reflect.TypeOf((*MockClient)(nil).GetUser), userID)
+}
+
+// SearchByCQL mocks base method.
+func (m *MockClient) SearchByCQL(cql string, limit int) ([]*model.ConfluencePage, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SearchByCQL", cql, limit)
+	ret0, _ := ret[0].([]*model.ConfluencePage)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SearchByCQL indicates an expected call of SearchByCQL.
+func (mr *MockClientMockRecorder) SearchByCQL(cql, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SearchByCQL", reflect.TypeOf((*MockClient)(nil).SearchByCQL), cql, limit)
 }

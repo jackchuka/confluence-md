@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jackchuka/confluence-md/internal/confluence"
 	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/spf13/cobra"
 )
@@ -50,7 +49,6 @@ func init() {
 
 	// Required flags
 	_ = pageCmd.MarkFlagRequired("api-token")
-	_ = pageCmd.MarkFlagRequired("email")
 }
 
 func runPage(_ *cobra.Command, args []string) error {
@@ -61,7 +59,7 @@ func runPage(_ *cobra.Command, args []string) error {
 	pageURL := args[0]
 
 	// Extract base URL from page URL
-	pageInfo, err := urlToPageInfo(pageURL)
+	pageInfo, err := urlToPageInfo(pageURL, pageOpts.Type)
 	if err != nil {
 		return fmt.Errorf("invalid Confluence URL: %w", err)
 	}
@@ -73,7 +71,15 @@ func runPage(_ *cobra.Command, args []string) error {
 	pageOpts.OutputNamer = namer
 
 	// Create Confluence client
-	client := confluence.NewClient(pageInfo.BaseURL, pageOpts.Email, pageOpts.APIKey)
+	client, err := newClientForAuth(pageInfo, pageOpts.authOptions)
+	if err != nil {
+		return err
+	}
+
+	// Self-hosted pretty URLs omit the page ID; resolve it from space + title.
+	if err := resolvePageID(client, &pageInfo); err != nil {
+		return fmt.Errorf("failed to resolve page ID: %w", err)
+	}
 
 	page, err := client.GetPage(pageInfo.PageID)
 	if err != nil {
@@ -89,7 +95,7 @@ func runPage(_ *cobra.Command, args []string) error {
 	result := convertSinglePage(
 		client,
 		page,
-		pageInfo.BaseURL,
+		pageInfo.Site(),
 		pageOpts,
 	)
 

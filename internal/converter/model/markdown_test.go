@@ -64,7 +64,8 @@ func TestNewMarkdownDocument(t *testing.T) {
 		UpdatedAt: time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC),
 	}
 
-	doc, err := NewMarkdownDocument(page, "https://example.atlassian.net")
+	site := model.SiteInfo{BaseURL: "https://example.atlassian.net", Deployment: model.DeploymentCloud, ContextPath: "/wiki"}
+	doc, err := NewMarkdownDocument(page, site)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
