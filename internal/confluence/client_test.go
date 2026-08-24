@@ -167,3 +167,91 @@ func TestDownloadAttachmentContentSurfacesErrorDetail(t *testing.T) {
 		}
 	}
 }
+
+func TestDownloadAttachmentContentFallsBackToRESTPath(t *testing.T) {
+	// Some sites answer the legacy media path with 401 even for a valid API
+	// token. The REST endpoint is tried next and its content is what we keep.
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		if strings.HasPrefix(r.URL.Path, "/wiki/download/") {
+			w.Header().Set("WWW-Authenticate", "OAuth")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte("<html><body>Log in</body></html>"))
+			return
+		}
+		_, _ = w.Write([]byte("PNGDATA"))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "user@example.com", "token")
+	data, err := c.DownloadAttachmentContent(&model.ConfluenceAttachment{
+		ID:           "att456",
+		Title:        "image.png",
+		DownloadLink: "/download/attachments/123/image.png",
+	})
+	if err != nil {
+		t.Fatalf("DownloadAttachmentContent returned error: %v", err)
+	}
+	if string(data) != "PNGDATA" {
+		t.Errorf("content = %q, want %q", data, "PNGDATA")
+	}
+	if len(gotPaths) != 2 {
+		t.Fatalf("requested paths = %v, want the legacy path then the REST path", gotPaths)
+	}
+	if gotPaths[1] != "/wiki/rest/api/content/123/child/attachment/att456/download" {
+		t.Errorf("fallback path = %q", gotPaths[1])
+	}
+}
+
+func TestDownloadAttachmentContentSkipsDuplicateFallback(t *testing.T) {
+	// A v2-form download link normalizes to the same URL the REST fallback
+	// builds. Retrying it verbatim can never succeed, so it must not be sent.
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"status":404,"code":"NOT_FOUND","title":"Not Found"}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "user@example.com", "token")
+	_, err := c.DownloadAttachmentContent(&model.ConfluenceAttachment{
+		ID:           "att456",
+		Title:        "image.png",
+		DownloadLink: "/rest/api/content/123/child/attachment/att456/download",
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if requests != 1 {
+		t.Errorf("server received %d requests, want 1", requests)
+	}
+}
+
+func TestHandleErrorResponseTruncatesUnrecognizedBody(t *testing.T) {
+	// A 401 on the media path answers with a full HTML login page, and every
+	// failed image prints its own error line.
+	body := strings.Repeat("<div>login</div>", 200)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "user@example.com", "token")
+	_, err := c.DownloadAttachmentContent(&model.ConfluenceAttachment{
+		ID:           "att456",
+		Title:        "image.png",
+		DownloadLink: "/rest/api/content/123/child/attachment/att456/download",
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(err.Error()) > maxErrorBodyChars*2 {
+		t.Errorf("error message is %d chars, want the body truncated", len(err.Error()))
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error %q does not mark the body as truncated", err)
+	}
+}
