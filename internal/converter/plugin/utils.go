@@ -6,12 +6,15 @@ import (
 	"strings"
 )
 
-// ParseConfluenceImage extracts filename from Confluence ac:image elements
-func ParseConfluenceImage(html string) string {
+// ParseConfluenceImage extracts filename from Confluence ac:image elements.
+// The input is re-rendered HTML, so the attribute value is escaped: a filename
+// containing & < > " arrives as an entity and must be unescaped to match the
+// attachment title it names.
+func ParseConfluenceImage(rawHTML string) string {
 	filenameRegex := regexp.MustCompile(`ri:filename="([^"]+)"`)
-	matches := filenameRegex.FindStringSubmatch(html)
+	matches := filenameRegex.FindStringSubmatch(rawHTML)
 	if len(matches) > 1 {
-		return matches[1]
+		return html.UnescapeString(matches[1])
 	}
 	return ""
 }

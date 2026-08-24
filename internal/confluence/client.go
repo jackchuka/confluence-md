@@ -243,20 +243,26 @@ func (c *client) attachmentRESTDownloadURL(attachment *model.ConfluenceAttachmen
 		c.baseURL, pageID, attachment.ID), true
 }
 
-// pageIDFromDownloadLink extracts the parent page ID from a download link of the
-// form /download/attachments/{pageID}/{filename}?...
+// pageIDFromDownloadLink extracts the parent page ID from a download link, in
+// either the legacy /download/attachments/{pageID}/{filename}?... form or the
+// /rest/api/content/{pageID}/child/attachment/{attachmentID}/download form
+// returned by the v2 attachments API.
 func pageIDFromDownloadLink(link string) (string, bool) {
-	_, rest, found := strings.Cut(link, "/attachments/")
-	if !found {
-		return "", false
+	for _, sep := range []string{"/attachments/", "/content/"} {
+		_, rest, found := strings.Cut(link, sep)
+		if !found {
+			continue
+		}
+
+		pageID, _, found := strings.Cut(rest, "/")
+		if !found || pageID == "" {
+			continue
+		}
+
+		return pageID, true
 	}
 
-	pageID, _, found := strings.Cut(rest, "/")
-	if !found || pageID == "" {
-		return "", false
-	}
-
-	return pageID, true
+	return "", false
 }
 
 func (c *client) normalizeDownloadLink(link string) (string, error) {
@@ -268,12 +274,12 @@ func (c *client) normalizeDownloadLink(link string) (string, error) {
 		link = "/" + link
 	}
 
-	if strings.HasPrefix(link, "/download/") {
+	// Attachment download links are relative to the Confluence context path, not
+	// to the site root. Both the legacy /download/... media path and the
+	// /rest/api/... form returned by the v2 attachments API need /wiki prefixed;
+	// without it the request lands outside Confluence and 404s.
+	if !strings.HasPrefix(link, "/wiki/") {
 		link = "/wiki" + link
-	}
-
-	if strings.HasPrefix(link, "download/") {
-		link = "/wiki/" + link
 	}
 
 	if strings.Contains(link, " ") {
@@ -320,10 +326,15 @@ func (c *client) handleErrorResponse(resp *http.Response, operation string) erro
 		return fmt.Errorf("failed to %s: HTTP %d", operation, resp.StatusCode)
 	}
 
-	// Try to parse error response
+	// Try to parse error response. A body in an unmodelled shape still
+	// unmarshals cleanly with every field zero, so require a non-empty message
+	// before trusting it — otherwise the error reads "failed to X: " and says
+	// nothing at all.
 	var errorResp model.ConfluenceErrorResponse
 	if err := json.Unmarshal(bodyBytes, &errorResp); err == nil {
-		return fmt.Errorf("failed to %s: %s", operation, errorResp.Message)
+		if msg := errorResp.Describe(); msg != "" {
+			return fmt.Errorf("failed to %s: HTTP %d - %s", operation, resp.StatusCode, msg)
+		}
 	}
 
 	// Fallback to HTTP status

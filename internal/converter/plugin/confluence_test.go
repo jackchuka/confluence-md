@@ -86,6 +86,22 @@ func TestHandleImage(t *testing.T) {
 	}
 }
 
+func TestHandleImageWithoutImageFolder(t *testing.T) {
+	// imageFolder is empty when attachment downloading is off. The link must be
+	// the bare filename, not a root-relative "/diagram.png" — which renders as
+	// the escaped, unresolvable "%2Fdiagram.png".
+	plugin := &ConfluencePlugin{}
+	node := findNode(t, `<ac:image ri:filename="diagram.png"></ac:image>`, "ac:image")
+	var out strings.Builder
+	status := plugin.handleImage(nil, &out, node)
+	if status != convpkg.RenderSuccess {
+		t.Fatalf("expected render success, got %v", status)
+	}
+	if out.String() != "![diagram.png](diagram.png)" {
+		t.Fatalf("unexpected markdown: %q", out.String())
+	}
+}
+
 func TestHandleEmoticon(t *testing.T) {
 	plugin := &ConfluencePlugin{}
 	node := findNode(t, `<ac:emoticon ac:emoji-fallback="😊"></ac:emoticon>`, "ac:emoticon")

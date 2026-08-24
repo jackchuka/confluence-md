@@ -18,6 +18,18 @@ func TestParseConfluenceImage(t *testing.T) {
 			html: `<ac:image></ac:image>`,
 			want: "",
 		},
+		{
+			// The input is re-rendered HTML, so a filename containing & arrives
+			// escaped. Left as-is it names an attachment that does not exist.
+			name: "ampersand entity is unescaped",
+			html: `<ac:image><ri:attachment ri:filename="Workflow&amp;Pipeline.png" /></ac:image>`,
+			want: "Workflow&Pipeline.png",
+		},
+		{
+			name: "angle bracket and quote entities are unescaped",
+			html: `<ac:image ri:filename="a&lt;b&gt;c&quot;d.png"></ac:image>`,
+			want: `a<b>c"d.png`,
+		},
 	}
 
 	for _, tt := range tests {

@@ -523,8 +523,13 @@ func (p *ConfluencePlugin) handleImage(ctx converter.Context, w converter.Writer
 		return converter.RenderSuccess
 	}
 
-	// Build local path for the image
-	localPath := p.imageFolder + "/" + filename
+	// Build local path for the image. imageFolder is empty when attachment
+	// downloading is off, in which case the link is the bare filename — joining
+	// unconditionally would yield a root-relative "/name".
+	localPath := filename
+	if p.imageFolder != "" {
+		localPath = p.imageFolder + "/" + filename
+	}
 
 	_, _ = fmt.Fprintf(w, "![%s](%s)", filename, url.PathEscape(localPath))
 
