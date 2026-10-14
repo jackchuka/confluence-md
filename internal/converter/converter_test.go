@@ -151,7 +151,7 @@ func TestSaveMarkdownDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read markdown file: %v", err)
 	}
-	if string(plainContent) != "body" {
+	if string(plainContent) != "body\n" {
 		t.Fatalf("unexpected markdown content: %q", string(plainContent))
 	}
 
@@ -169,6 +169,9 @@ func TestSaveMarkdownDocument(t *testing.T) {
 	frontStr := string(frontContent)
 	if !strings.HasPrefix(frontStr, "---\n") {
 		t.Fatalf("expected frontmatter prefix, got %q", frontStr)
+	}
+	if !strings.HasSuffix(frontStr, "---\n\nbody\n") {
+		t.Fatalf("expected body with trailing newline after frontmatter, got %q", frontStr)
 	}
 	if !strings.Contains(frontStr, "title: \"Title\"") {
 		t.Fatalf("expected title in frontmatter, got %q", frontStr)
@@ -321,5 +324,30 @@ func TestConverterDownloadImagesSkipsOversizedImage(t *testing.T) {
 	}
 	if len(doc.ImageFailures) != 1 {
 		t.Fatalf("expected the oversized image to be recorded as a failure, got %+v", doc.ImageFailures)
+	}
+}
+
+func TestConvertHTMLTaskList(t *testing.T) {
+	conv := NewConverter(nil)
+
+	input := `<p>Todo:</p>
+<ac:task-list>
+<ac:task><ac:task-id>1</ac:task-id><ac:task-status>complete</ac:task-status><ac:task-body>Write <strong>docs</strong></ac:task-body></ac:task>
+<ac:task><ac:task-id>2</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Ship it</ac:task-body>
+<ac:task-list>
+<ac:task><ac:task-id>3</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Tag release</ac:task-body></ac:task>
+</ac:task-list>
+</ac:task>
+</ac:task-list>
+<p>After</p>`
+
+	got, err := conv.ConvertHTML(input)
+	if err != nil {
+		t.Fatalf("ConvertHTML returned error: %v", err)
+	}
+
+	want := "Todo:\n\n- [x] Write **docs**\n- [ ] Ship it\n  - [ ] Tag release\n\nAfter"
+	if got != want {
+		t.Fatalf("ConvertHTML() = %q, want %q", got, want)
 	}
 }

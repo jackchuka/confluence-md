@@ -58,3 +58,26 @@ func TestGenerateFileName_TemplateAddsExtension(t *testing.T) {
 		t.Fatalf("expected docs.md, got %q", name)
 	}
 }
+
+func TestGenerateFileName_TemplateLabelNames(t *testing.T) {
+	page := &confluenceModel.ConfluencePage{Title: "Docs"}
+	page.Metadata.Labels = []confluenceModel.Label{{Name: "howto"}, {Name: "api"}}
+
+	tests := map[string]string{
+		`{{ range .LabelNames }}{{ . }}-{{ end }}{{ .SlugTitle }}`: "howto-api-docs.md",
+		`{{ join .LabelNames "_" }}-{{ .SlugTitle }}`:              "howto_api-docs.md",
+	}
+	for tmpl, want := range tests {
+		namer, err := NewTemplateOutputNamer(tmpl)
+		if err != nil {
+			t.Fatalf("NewTemplateOutputNamer(%q) returned error: %v", tmpl, err)
+		}
+		name, err := GenerateFileName(page, namer)
+		if err != nil {
+			t.Fatalf("GenerateFileName(%q) returned error: %v", tmpl, err)
+		}
+		if name != want {
+			t.Fatalf("template %q: expected %q, got %q", tmpl, want, name)
+		}
+	}
+}
