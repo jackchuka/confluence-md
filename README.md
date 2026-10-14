@@ -11,7 +11,7 @@ or convert a whole page tree into a matching folder hierarchy.
 [![Release](https://img.shields.io/github/v/release/jackchuka/confluence-md?sort=semver)](https://github.com/jackchuka/confluence-md/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-<img src="assets/demo.gif" alt="confluence-md converting Confluence storage-format HTML with status, info, code, table and warning macros into Markdown" width="800">
+<img src="assets/demo.gif" alt="confluence-md converting Confluence storage-format HTML with status, info, code, task list, table and warning elements into Markdown" width="800">
 
 [Installation](#installation) · [Quick Start](#quick-start) · [Commands](#commands) · [Supported Elements](#supported-confluence-elements)
 
@@ -135,8 +135,9 @@ confluence-md tree <page-url> -e you@example.com -t "$CONFLUENCE_API_TOKEN" --de
 
 - `{{ .Page }}`: the full page object, e.g. `{{ .Page.Title }}`, `{{ .Page.ID }}`, `{{ .Page.SpaceKey }}`, `{{ .Page.UpdatedAt.Format "2006-01-02" }}` (see `ConfluencePage` in [`internal/confluence/model`](internal/confluence/model/page.go))
 - `{{ .SlugTitle }}`: the slugified title, e.g. `getting-started`
+- `{{ .LabelNames }}`: the page's label names as a list, e.g. `{{ join .LabelNames "-" }}`
 
-The helper `{{ slug <string> }}` slugifies any string. If the result has no extension, `.md` is appended.
+The helpers `{{ slug <string> }}` (slugify any string) and `{{ join <list> <separator> }}` are available. If the result has no extension, `.md` is appended.
 
 ## Output Structure
 
@@ -159,6 +160,7 @@ output/
 | **Emoticons**       | `ac:emoticon`              | Emoji fallback or shortname                                           |
 | **Tables**          | HTML tables                | Markdown tables                                                       |
 | **Lists**           | HTML lists                 | Nested lists with proper indentation                                  |
+| **Task Lists**      | `ac:task-list`             | `- [x]` / `- [ ]` task items, nested tasks indented                   |
 | **User Links**      | `ac:link` + `ri:user`      | `@DisplayName` (or `@user(account-id)` if the name can't be resolved) |
 | **Time Elements**   | `<time>`                   | The `datetime` attribute as text                                      |
 | **Inline Comments** | `ac:inline-comment-marker` | Text preserved, plus a `<!-- comment-ref: id -->` comment             |
