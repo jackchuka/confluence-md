@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jackchuka/confluence-md/internal/converter"
 	"github.com/spf13/cobra"
@@ -77,6 +78,9 @@ func runHTMLConvert(cmd *cobra.Command, args []string) error {
 	markdown, err := conv.ConvertHTML(string(htmlContent))
 	if err != nil {
 		return fmt.Errorf("failed to convert HTML: %w", err)
+	}
+	if !strings.HasSuffix(markdown, "\n") {
+		markdown += "\n"
 	}
 
 	// Write output

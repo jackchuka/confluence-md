@@ -75,6 +75,7 @@ var templateFuncMap = template.FuncMap{
 	"slug": func(value string) string {
 		return slug.MakeLang(value, "en")
 	},
+	"join": strings.Join,
 }
 
 // TemplateOutputNamer renders filenames from a text/template string.
@@ -102,8 +103,9 @@ func (n *TemplateOutputNamer) FileName(page *confluenceModel.ConfluencePage) (st
 	}
 
 	data := outputTemplateData{
-		Page:      page,
-		SlugTitle: slug.MakeLang(strings.TrimSpace(page.Title), "en"),
+		Page:       page,
+		SlugTitle:  slug.MakeLang(strings.TrimSpace(page.Title), "en"),
+		LabelNames: page.GetLabelNames(),
 	}
 
 	var builder strings.Builder
@@ -115,6 +117,7 @@ func (n *TemplateOutputNamer) FileName(page *confluenceModel.ConfluencePage) (st
 }
 
 type outputTemplateData struct {
-	Page      *confluenceModel.ConfluencePage
-	SlugTitle string
+	Page       *confluenceModel.ConfluencePage
+	SlugTitle  string
+	LabelNames []string
 }

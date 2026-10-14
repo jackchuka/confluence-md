@@ -137,6 +137,7 @@ func (p *ConfluencePlugin) Init(conv *converter.Converter) error {
 	conv.Register.RendererFor("ac:inline-comment-marker", converter.TagTypeInline, p.handleInlineComment, converter.PriorityStandard)
 	conv.Register.RendererFor("ac:placeholder", converter.TagTypeInline, p.handlePlaceholder, converter.PriorityStandard)
 	conv.Register.RendererFor("time", converter.TagTypeInline, p.handleTime, converter.PriorityStandard)
+	conv.Register.RendererFor("ac:task-list", converter.TagTypeBlock, p.handleTaskList, converter.PriorityStandard)
 
 	// Register custom table handler with higher priority to override default
 	conv.Register.RendererFor("table", converter.TagTypeBlock, p.handleTable, converter.PriorityEarly)
@@ -370,6 +371,53 @@ func (p *ConfluencePlugin) flattenTaskList(ctx converter.Context, w *strings.Bui
 
 		w.WriteString(body)
 		w.WriteString("<br>")
+	}
+}
+
+// handleTaskList converts Confluence task lists to Markdown task list items
+func (p *ConfluencePlugin) handleTaskList(ctx converter.Context, w converter.Writer, n *html.Node) converter.RenderStatus {
+	var buf strings.Builder
+	p.writeTaskList(ctx, &buf, n, "")
+	_, _ = w.WriteString("\n\n" + strings.TrimRight(buf.String(), "\n") + "\n\n")
+	return converter.RenderSuccess
+}
+
+func (p *ConfluencePlugin) writeTaskList(ctx converter.Context, w *strings.Builder, taskListNode *html.Node, indent string) {
+	for task := taskListNode.FirstChild; task != nil; task = task.NextSibling {
+		if task.Type != html.ElementNode || task.Data != "ac:task" {
+			continue
+		}
+
+		checkbox := "[ ]"
+		var body strings.Builder
+		var nested []*html.Node
+		for child := task.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode {
+				continue
+			}
+			switch child.Data {
+			case "ac:task-status":
+				if child.FirstChild != nil && strings.TrimSpace(child.FirstChild.Data) == "complete" {
+					checkbox = "[x]"
+				}
+			case "ac:task-body":
+				for c := child.FirstChild; c != nil; c = c.NextSibling {
+					if c.Type == html.ElementNode && c.Data == "ac:task-list" {
+						nested = append(nested, c)
+						continue
+					}
+					ctx.RenderNodes(ctx, &body, c)
+				}
+			case "ac:task-list":
+				nested = append(nested, child)
+			}
+		}
+
+		text := strings.Join(strings.Fields(body.String()), " ")
+		w.WriteString(indent + "- " + checkbox + " " + text + "\n")
+		for _, list := range nested {
+			p.writeTaskList(ctx, w, list, indent+"  ")
+		}
 	}
 }
 

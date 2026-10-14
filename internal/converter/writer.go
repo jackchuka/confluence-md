@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jackchuka/confluence-md/internal/converter/model"
 )
@@ -26,7 +27,12 @@ func SaveMarkdownDocument(doc *model.MarkdownDocument, outputPath string, withFr
 			return fmt.Errorf("failed to convert document to markdown: %w", err)
 		}
 		content = rendered
-		doc.Content = rendered
+	}
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if withFrontmatter {
+		doc.Content = content
 	}
 
 	if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
