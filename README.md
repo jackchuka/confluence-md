@@ -1,20 +1,37 @@
+<div align="center">
+
 # confluence-md
+
+**Convert Confluence pages to clean Markdown with one command.**
+
+Point it at a page URL to get Markdown with front matter and local images,<br>
+or convert a whole page tree into a matching folder hierarchy.
 
 [![Test](https://github.com/jackchuka/confluence-md/actions/workflows/test.yml/badge.svg)](https://github.com/jackchuka/confluence-md/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/jackchuka/confluence-md?sort=semver)](https://github.com/jackchuka/confluence-md/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A CLI tool to convert Confluence pages to Markdown format with a single command. Supports images, tables, lists, and various macros (**yes, even mermaid diagrams!**).
+<img src="assets/demo.gif" alt="confluence-md converting Confluence storage-format HTML with status, info, code, table and warning macros into Markdown" width="800">
+
+[Installation](#installation) · [Quick Start](#quick-start) · [Commands](#commands) · [Supported Elements](#supported-confluence-elements)
+
+</div>
+
+---
+
+Confluence stores pages in its own XHTML dialect full of `ac:structured-macro`, `ri:user` and `ac:image` tags. Copy-pasting or generic HTML-to-Markdown converters drop or mangle most of it. **confluence-md** understands that format: code macros become fenced code blocks, info and warning panels become blockquotes, status lozenges become badges, user mentions resolve to display names, and attached images are downloaded next to the Markdown file. This works well for migrating docs into a repository or feeding Confluence content to other tools.
 
 ## Features
 
-- Convert single Confluence pages to Markdown
-- Convert entire page trees with hierarchical structure
-- Download and embed images from Confluence pages
-- Support for Confluence Cloud with API authentication
-- Enhanced support for Confluence-specific elements (user references, status badges, time elements)
-- Clean, readable Markdown output
-- Cross-platform support (Linux, macOS, Windows)
+- **Single pages or whole trees**: `page` converts one page; `tree` walks its descendants and mirrors the hierarchy as directories
+- **Images included**: attachments are downloaded into an `assets/` folder and linked with relative paths
+- **Confluence macros**: code, info/warning/note/tip panels, status, expand, details, and Mermaid diagrams (`mermaid-cloud`)
+- **User mentions**: resolved to `@Display Name` via the Confluence API
+- **Front matter**: title, author, date, labels, and page ID/space/version/URL in YAML
+- **Custom filenames**: name output files with a Go template, e.g. prefix them with the last-updated date
+- **Tree controls**: limit depth, exclude pages by title glob, fetch in parallel, or preview with `--dry-run`
+- **Offline mode**: `html` converts storage-format HTML from a file or stdin, no API access needed
+- **Single binary**: Linux, macOS, and Windows
 
 ## Installation
 
@@ -24,193 +41,156 @@ A CLI tool to convert Confluence pages to Markdown format with a single command.
 brew install jackchuka/tap/confluence-md
 ```
 
-### Pre-built Binaries
-
-Download the latest release for your platform from the [releases page](https://github.com/jackchuka/confluence-md/releases).
-
-### From Source
+### Go
 
 ```bash
 go install github.com/jackchuka/confluence-md/cmd/confluence-md@latest
 ```
 
-## Usage
+### Binary
 
-### Authentication
+Download a prebuilt binary from the [releases page](https://github.com/jackchuka/confluence-md/releases).
 
-You'll need:
+## Quick Start
 
-- Your Confluence email address
-- A Confluence API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens))
+1. **Create an API token** at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens). Use it with the email address of your Confluence Cloud account.
 
-### Convert a Single Page
+2. **Convert a page** by its URL:
+
+   ```bash
+   confluence-md page https://example.atlassian.net/wiki/spaces/DOCS/pages/12345/Getting+Started \
+     --email you@example.com --api-token "$CONFLUENCE_API_TOKEN"
+   ```
+
+   This writes `./output/getting-started.md` and its images to `./output/assets/`.
+
+3. **Convert a page and all its children**, previewing first:
+
+   ```bash
+   confluence-md tree <page-url> --email you@example.com --api-token "$CONFLUENCE_API_TOKEN" --dry-run
+   confluence-md tree <page-url> --email you@example.com --api-token "$CONFLUENCE_API_TOKEN" --output ./wiki
+   ```
+
+## Commands
+
+| Command                     | Description                                                      |
+| --------------------------- | ---------------------------------------------------------------- |
+| `confluence-md page <url>`  | Convert a single page                                            |
+| `confluence-md tree <url>`  | Convert a page and its descendants into a directory hierarchy    |
+| `confluence-md html [file]` | Convert storage-format HTML from a file or stdin (no API needed) |
+| `confluence-md version`     | Print the version                                                |
+
+### `page` and `tree` options
+
+| Flag                     | Description                                     | Default           |
+| ------------------------ | ----------------------------------------------- | ----------------- |
+| `-e`, `--email`          | Confluence account email (**required**)         |                   |
+| `-t`, `--api-token`      | Confluence API token (**required**)             |                   |
+| `-o`, `--output`         | Output directory                                | `./output`        |
+| `--output-name-template` | Go template for the output filename (see below) | slug of the title |
+| `--download-images`      | Download images locally                         | `true`            |
+| `--image-folder`         | Folder for downloaded images                    | `assets`          |
+| `--include-metadata`     | Write YAML front matter                         | `true`            |
+
+### `tree` options
+
+| Flag         | Description                                       | Default |
+| ------------ | ------------------------------------------------- | ------- |
+| `--depth`    | Maximum depth to traverse (`-1` for unlimited)    | `-1`    |
+| `--exclude`  | Glob patterns matched against page titles to skip |         |
+| `--parallel` | Number of parallel page fetches                   | `3`     |
+| `--dry-run`  | Print the page tree and stats without converting  | `false` |
+
+### `html` options
+
+| Flag             | Description                      | Default  |
+| ---------------- | -------------------------------- | -------- |
+| `-o`, `--output` | Output file                      | stdout   |
+| `--image-folder` | Folder path used for image links | `assets` |
 
 ```bash
-confluence-md page <page-url> --email your-email@example.com --api-token your-api-token
+confluence-md html page.html -o page.md   # from a file
+cat page.html | confluence-md html        # from stdin to stdout
 ```
 
-Example:
-
-```bash
-confluence-md page https://example.atlassian.net/wiki/spaces/SPACE/pages/12345/Title \
-  --email john.doe@company.com \
-  --api-token your-api-token-here
-```
-
-### Convert a Page Tree
-
-Convert an entire page hierarchy:
-
-```bash
-confluence-md tree <page-url> --email your-email@example.com --api-token your-api-token
-```
-
-### Convert HTML Files
-
-Convert Confluence HTML directly without API access (useful for testing or working with exported HTML):
-
-```bash
-# Convert from file
-confluence-md html page.html -o output.md
-
-# Convert from stdin
-cat page.html | confluence-md html -o output.md
-
-# Output to stdout
-confluence-md html page.html
-```
-
-### Common Options
-
-- `--email, -e`: Your Confluence email address (**required**)
-- `--api-token, -t`: Your Confluence API token (**required**)
-- `--output, -o`: Output directory (default: current directory)
-- `--output-name-template`: Go template for the markdown filename (see below)
-- `--download-images`: Download images from Confluence (default: true)
-- `--image-folder`: Folder to save images (default: `assets`)
-- `--include-metadata`: Include page metadata in the Markdown front matter (default: true)
+Without API access, `html` cannot resolve user names (they render as `@user(account-id)`) or fetch Mermaid attachments.
 
 ### Examples
 
 ```bash
-# Convert to a specific directory
-confluence-md page <page-url> --email user@example.com --api-token token --output ./docs
+# Prefix filenames with the last-updated date: 2025-01-31-getting-started.md
+confluence-md page <page-url> -e you@example.com -t "$CONFLUENCE_API_TOKEN" \
+  --output-name-template '{{ .Page.UpdatedAt.Format "2006-01-02" }}-{{ .SlugTitle }}'
 
-# Prefix filenames with the last updated date (YYYY-MM-DD-title.md)
-confluence-md page <page-url> \
-  --email user@example.com \
-  --api-token token \
-  --output-name-template "{{ .Page.UpdatedAt.Format \"2006-01-02\" }}-{{ .SlugTitle }}"
+# Skip images
+confluence-md page <page-url> -e you@example.com -t "$CONFLUENCE_API_TOKEN" --download-images=false
 
-# Convert without downloading images
-confluence-md page <page-url> --email user@example.com --api-token token --download-images=false
-
-# Convert entire page tree
-confluence-md tree <page-url> --email user@example.com --api-token token --output ./wiki
+# Two levels deep, skipping archived pages
+confluence-md tree <page-url> -e you@example.com -t "$CONFLUENCE_API_TOKEN" --depth 2 --exclude 'Archive*'
 ```
 
-### Output name templates
+## Output Name Templates
 
-The `--output-name-template` flag accepts a Go text/template string. Templates can reference:
+`--output-name-template` takes a Go [`text/template`](https://pkg.go.dev/text/template) string with this data:
 
-- `{{ .Page }}` – the full Confluence page object (e.g. `{{ .Page.UpdatedAt.Format "2006-01-02" }}`)
-  - `{{ .Page.Title }}` – the original page title
-  - `{{ .Page.ID }}` – the Confluence page ID
-  - `{{ .Page.SpaceKey }}` – the Confluence space key
-  - see ConfluencePage struct for more fields
-- `{{ .SlugTitle }}` – the default slugified title (e.g. `sample-page`)
+- `{{ .Page }}`: the full page object, e.g. `{{ .Page.Title }}`, `{{ .Page.ID }}`, `{{ .Page.SpaceKey }}`, `{{ .Page.UpdatedAt.Format "2006-01-02" }}` (see `ConfluencePage` in [`internal/confluence/model`](internal/confluence/model/page.go))
+- `{{ .SlugTitle }}`: the slugified title, e.g. `getting-started`
 
-Additionally, you can use the following helper functions:
+The helper `{{ slug <string> }}` slugifies any string. If the result has no extension, `.md` is appended.
 
-- `{{ slug <string> }}` – slugifies a string (e.g. `Sample Page` → `sample-page`)
+## Output Structure
 
-If the rendered filename omits an extension, `.md` is appended automatically.
+```text
+output/
+├── getting-started.md
+├── assets/                 # downloaded images
+└── getting-started/        # tree: children go in a folder named after the parent
+    ├── installation.md
+    └── configuration.md
+```
 
 ## Supported Confluence Elements
 
 ### Basic Elements
 
-| Element             | Confluence Tag             | Conversion                                                              |
-| ------------------- | -------------------------- | ----------------------------------------------------------------------- |
-| **Images**          | `ac:image`                 | Downloaded and converted to local markdown image references             |
-| **Emoticons**       | `ac:emoticon`              | Converted to emoji fallback or shortnames                               |
-| **Tables**          | Standard HTML tables       | Full table support with proper markdown formatting                      |
-| **Lists**           | Standard HTML lists        | Nested lists with proper indentation                                    |
-| **User Links**      | `ac:link` + `ri:user`      | Converted to `@DisplayName` (or `@user(account-id)` if name not cached) |
-| **Time Elements**   | `<time>`                   | Datetime attribute extracted and displayed                              |
-| **Inline Comments** | `ac:inline-comment-marker` | Text preserved with comment reference                                   |
-| **Placeholders**    | `ac:placeholder`           | Converted to HTML comments                                              |
+| Element             | Confluence Tag             | Conversion                                                            |
+| ------------------- | -------------------------- | --------------------------------------------------------------------- |
+| **Images**          | `ac:image`                 | Downloaded and linked as local Markdown images                        |
+| **Emoticons**       | `ac:emoticon`              | Emoji fallback or shortname                                           |
+| **Tables**          | HTML tables                | Markdown tables                                                       |
+| **Lists**           | HTML lists                 | Nested lists with proper indentation                                  |
+| **User Links**      | `ac:link` + `ri:user`      | `@DisplayName` (or `@user(account-id)` if the name can't be resolved) |
+| **Time Elements**   | `<time>`                   | The `datetime` attribute as text                                      |
+| **Inline Comments** | `ac:inline-comment-marker` | Text preserved, plus a `<!-- comment-ref: id -->` comment             |
+| **Placeholders**    | `ac:placeholder`           | HTML comments                                                         |
 
 ### Macros (`ac:structured-macro`)
 
-| Macro               | Status                      | Conversion                                                          |
-| ------------------- | --------------------------- | ------------------------------------------------------------------- |
-| **`info`**          | ✅ Fully Supported          | Converted to blockquote with ℹ️ Info prefix                         |
-| **`warning`**       | ✅ Fully Supported          | Converted to blockquote with ⚠️ Warning prefix                      |
-| **`note`**          | ✅ Fully Supported          | Converted to blockquote with 📝 Note prefix                         |
-| **`tip`**           | ✅ Fully Supported          | Converted to blockquote with 💡 Tip prefix                          |
-| **`code`**          | ✅ Fully Supported          | Converted to markdown code blocks with language syntax highlighting |
-| **`mermaid-cloud`** | ✅ Fully Supported          | Converted to mermaid code blocks                                    |
-| **`expand`**        | ✅ Fully Supported          | Content extracted and rendered directly                             |
-| **`details`**       | ✅ Fully Supported          | Content extracted and rendered directly                             |
-| **`status`**        | ✅ Fully Supported          | Converted to emoji badges (🔴 **S1**, 🟡, 🟢, 🔵, ⚪)               |
-| **`toc`**           | ⚠️ Partially Supported      | Converted to `<!-- Table of Contents -->` comment                   |
-| **`children`**      | ⚠️ Partially Supported      | Converted to `<!-- Child Pages -->` comment                         |
-| **Other macros**    | Plan to support per request | Converted to `<!-- Unsupported macro: {name} -->` comments          |
-
-### User Name Resolution
-
-User references (`@user`) are automatically resolved to display names when converting pages via the `page` or `tree` commands
-
-**Note:** When using the `html` command (without Confluence API access), user names cannot be resolved and will always display as `@user(account-id)`.
-
-## Output Structure
-
-The tool creates:
-
-- Markdown files (.md) for each page
-- An `assets/` directory containing downloaded images
-- Hierarchical directory structure for page trees
+| Macro                            | Support | Conversion                                                                 |
+| -------------------------------- | ------- | -------------------------------------------------------------------------- |
+| `info`, `warning`, `note`, `tip` | Full    | Blockquote with an `Info`/`Warning`/`Note`/`Tip` label                     |
+| `code`                           | Full    | Fenced code block with language                                            |
+| `mermaid-cloud`                  | Full    | `mermaid` code block, loaded from the page attachment                      |
+| `expand`, `details`              | Full    | Content rendered inline                                                    |
+| `status`                         | Full    | Colored badge, e.g. 🟢 **Done**                                            |
+| `toc`                            | Partial | `<!-- Table of Contents -->` comment                                       |
+| `children`                       | Partial | `<!-- Child Pages -->` comment                                             |
+| Others                           | No      | `<!-- Unsupported macro: {name} -->` comment; open an issue to request one |
 
 ## Development
 
-### Prerequisites
-
-- Go 1.24.4 or later
-
-### Building
-
-```bash
-git clone https://github.com/jackchuka/confluence-md.git
-cd confluence-md
-go build -o confluence-md cmd/confluence-md/main.go
-```
-
-### Testing
-
 ```bash
 go test ./...
-```
-
-### Linting
-
-```bash
+go build -o confluence-md ./cmd/confluence-md
 golangci-lint run
 ```
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+The demo GIF is generated with [VHS](https://github.com/charmbracelet/vhs): `vhs assets/demo.tape`.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Run tests and linting
-6. Submit a pull request
+Contributions are welcome. For larger changes, please open an [issue](https://github.com/jackchuka/confluence-md/issues) first to discuss what you would like to change.
 
-## Support
+## License
 
-For issues and feature requests, please use the [GitHub issue tracker](https://github.com/jackchuka/confluence-md/issues).
+[MIT](LICENSE)
